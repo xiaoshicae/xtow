@@ -28,10 +28,7 @@ type Runnable interface {
 
 // Run 读配置、初始化全部组件、启动 r，阻塞到退出信号，然后逆序关闭。
 func Run(r Runnable, opts ...Option) error {
-	o := options{
-		stopTimeout: 15 * time.Second,
-		logger:      slog.Default(),
-	}
+	o := options{stopTimeout: 15 * time.Second}
 	for _, f := range opts {
 		f(&o)
 	}
@@ -48,7 +45,7 @@ func Run(r Runnable, opts ...Option) error {
 		return err
 	}
 
-	closers, err := initAll(list, o.logger)
+	closers, err := initAll(list, o)
 	if err != nil {
 		return errors.Join(err, shutdown(closers, o))
 	}
@@ -62,7 +59,7 @@ func Run(r Runnable, opts ...Option) error {
 	var first error
 	select {
 	case <-ctx.Done():
-		o.logger.Info("收到退出信号")
+		o.log().Info("收到退出信号")
 	case e := <-runErr:
 		first = e
 	}
@@ -87,7 +84,7 @@ func loadConfigInto(list []registry.Component, o options) error {
 	}
 
 	if path == "" {
-		o.logger.Warn("未找到配置文件，全部使用默认值",
+		o.log().Warn("未找到配置文件，全部使用默认值",
 			"查找过的位置", config.SearchPaths,
 			"也可用", "--"+config.ArgKey+"=<path> 或 "+config.EnvKey)
 		return nil
@@ -96,7 +93,7 @@ func loadConfigInto(list []registry.Component, o options) error {
 		return fmt.Errorf("xtow: 指定的配置文件不存在: %s", path)
 	}
 
-	o.logger.Info("加载配置", "文件", path)
+	o.log().Info("加载配置", "文件", path)
 	return config.Load(path, list)
 }
 
@@ -115,13 +112,15 @@ type named struct {
 	c   io.Closer
 }
 
-func initAll(list []registry.Component, logger *slog.Logger) ([]named, error) {
+func initAll(list []registry.Component, o options) ([]named, error) {
 	var closers []named
 	for _, c := range list {
 		if c.Init == nil {
 			continue
 		}
-		logger.Info("初始化", "组件", c.Key)
+		// 每次重新取：xlog 就在这个循环里把全局默认 logger 换掉，
+		// 它之后的组件应该用新的那个
+		o.log().Info("初始化", "组件", c.Key)
 		cl, err := safeInit(c)
 		if err != nil {
 			return closers, fmt.Errorf("%s 初始化失败: %w", c.Key, err)
@@ -137,7 +136,7 @@ func shutdown(closers []named, o options) error {
 	var errs []error
 	for i := len(closers) - 1; i >= 0; i-- {
 		n := closers[i]
-		o.logger.Info("关闭", "组件", n.key)
+		o.log().Info("关闭", "组件", n.key)
 		if err := safe(n.key, func() error { return n.c.Close() }); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", n.key, err))
 		}
@@ -170,13 +169,28 @@ func safe(name string, f func() error) (err error) {
 type options struct {
 	configPath  string
 	stopTimeout time.Duration
-	logger      *slog.Logger
+
+	// logger 留空表示每次取 slog.Default()。
+	//
+	// 必须延迟到用的时候才取：xlog 是在 StageLog 初始化时才调用
+	// slog.SetDefault 的，Run 开头捕获一次的话，后面所有框架日志
+	// 都还写在初始化之前那个默认 logger 上。
+	logger *slog.Logger
 
 	// components 指定要装配的组件，留空则取全局登记板。
 	//
 	// 目前只有测试在用：它让「只装配一部分」成为可能，而这正是
 	// 全局登记板本身做不到的事。等有真实需求时再导出。
 	components []registry.Component
+}
+
+// log 取当前该用的 logger。未显式指定时每次都取标准库的全局默认值，
+// 这样 xlog 初始化完成后，框架自己的日志会自动跟着走新的那个。
+func (o options) log() *slog.Logger {
+	if o.logger != nil {
+		return o.logger
+	}
+	return slog.Default()
 }
 
 type Option func(*options)

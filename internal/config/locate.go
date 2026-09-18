@@ -10,7 +10,7 @@ import (
 const (
 	// ArgKey / EnvKey 显式指定配置文件位置的两种方式
 	ArgKey = "config"
-	EnvKey = "XTWO_CONFIG"
+	EnvKey = "XTOW_CONFIG"
 )
 
 // SearchPaths 未显式指定时，按顺序查找的约定位置

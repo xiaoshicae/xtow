@@ -113,9 +113,9 @@ func TestLoad_没人认领的块是错误(t *testing.T) {
 
 func TestLoad_占位符(t *testing.T) {
 	t.Run("环境变量已设置", func(t *testing.T) {
-		t.Setenv("XTWO_T_ADDR", "10.1.1.1:9")
+		t.Setenv("XTOW_T_ADDR", "10.1.1.1:9")
 		list, c := comps(t)
-		if err := Load(write(t, "Demo:\n  Addr: \"${XTWO_T_ADDR}\"\n"), list); err != nil {
+		if err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_ADDR}\"\n"), list); err != nil {
 			t.Fatal(err)
 		}
 		if c.Addr != "10.1.1.1:9" {
@@ -124,9 +124,9 @@ func TestLoad_占位符(t *testing.T) {
 	})
 
 	t.Run("未设置时用默认值", func(t *testing.T) {
-		os.Unsetenv("XTWO_T_UNSET")
+		os.Unsetenv("XTOW_T_UNSET")
 		list, c := comps(t)
-		if err := Load(write(t, "Demo:\n  Addr: \"${XTWO_T_UNSET:1.2.3.4:5}\"\n"), list); err != nil {
+		if err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_UNSET:1.2.3.4:5}\"\n"), list); err != nil {
 			t.Fatal(err)
 		}
 		if c.Addr != "1.2.3.4:5" {
@@ -135,18 +135,18 @@ func TestLoad_占位符(t *testing.T) {
 	})
 
 	t.Run("必填未设置则启动失败", func(t *testing.T) {
-		os.Unsetenv("XTWO_T_REQUIRED")
+		os.Unsetenv("XTOW_T_REQUIRED")
 		list, _ := comps(t)
-		err := Load(write(t, "Demo:\n  Addr: \"${XTWO_T_REQUIRED}\"\n"), list)
-		if err == nil || !strings.Contains(err.Error(), "XTWO_T_REQUIRED") {
+		err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_REQUIRED}\"\n"), list)
+		if err == nil || !strings.Contains(err.Error(), "XTOW_T_REQUIRED") {
 			t.Fatalf("必填占位符缺失应报错并指出变量名，got=%v", err)
 		}
 	})
 
 	t.Run("显式空串覆盖默认值", func(t *testing.T) {
-		t.Setenv("XTWO_T_EMPTY", "")
+		t.Setenv("XTOW_T_EMPTY", "")
 		list, c := comps(t)
-		if err := Load(write(t, "Demo:\n  Addr: \"${XTWO_T_EMPTY:fallback}\"\n"), list); err != nil {
+		if err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_EMPTY:fallback}\"\n"), list); err != nil {
 			t.Fatal(err)
 		}
 		if c.Addr != "" {
@@ -157,9 +157,9 @@ func TestLoad_占位符(t *testing.T) {
 
 func TestLoad_占位符的值含特殊字符不破坏结构(t *testing.T) {
 	// 在解析后的节点上展开，而不是对原始字节做文本替换 —— 否则这是条注入路径
-	t.Setenv("XTWO_T_INJECT", "a: b\nEvil: true")
+	t.Setenv("XTOW_T_INJECT", "a: b\nEvil: true")
 	list, c := comps(t)
-	if err := Load(write(t, "Demo:\n  Addr: \"${XTWO_T_INJECT}\"\n"), list); err != nil {
+	if err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_INJECT}\"\n"), list); err != nil {
 		t.Fatal(err)
 	}
 	if c.Addr != "a: b\nEvil: true" {
