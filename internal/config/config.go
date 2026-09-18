@@ -4,7 +4,6 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -13,6 +12,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xconfig"
 )
 
 var placeholder = regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
@@ -97,15 +97,12 @@ func isEmptyNode(n *yaml.Node) bool {
 	return (n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode) && len(n.Content) == 0
 }
 
-// decodeStrict 严格解码：认不出的字段是错误，不是忽略
+// decodeStrict 严格解码：认不出的字段是错误，不是忽略。
+//
+// 与集成包用的是同一个实现：集合元素的默认值要靠元素自己的 UnmarshalYAML 铺，
+// 那里必须能拿到同样的严格检查，否则「拼错就失败」在集合里会悄悄失效。
 func decodeStrict(node *yaml.Node, target any) error {
-	b, err := yaml.Marshal(node)
-	if err != nil {
-		return err
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(b))
-	dec.KnownFields(true)
-	return dec.Decode(target)
+	return xconfig.DecodeStrict(node, target)
 }
 
 // expand 在解析后的节点上展开占位符，不在原始字节上做文本替换：
