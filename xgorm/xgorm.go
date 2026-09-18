@@ -24,11 +24,14 @@ import (
 const (
 	// pingAttempts 建连验证的尝试次数
 	pingAttempts = 3
-	// pingInterval 两次尝试之间的间隔
-	pingInterval = time.Second
+
 	// fallbackPingTimeout 配置里推算不出预算时，单次 Ping 的兜底超时
 	fallbackPingTimeout = time.Second
 )
+
+// pingInterval 两次尝试之间的间隔。是变量而不是常量，只为让测试能调短——
+// 连不上的用例要跑满整轮重试，按一秒算一次就是几十秒。
+var pingInterval = time.Second
 
 // New 按配置建一个 GORM 实例，不触碰任何全局变量。
 //

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,6 +15,12 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 )
+
+// TestMain 调短重试间隔：连不上的用例要跑满整轮重试，按一秒算一次就是几十秒
+func TestMain(m *testing.M) {
+	pingInterval = 10 * time.Millisecond
+	os.Exit(m.Run())
+}
 
 // deadAddr 返回一个没人监听的地址：建连必定失败，且失败得很快
 func deadAddr(t *testing.T) string {
@@ -40,7 +47,7 @@ func TestNew_连不上时不漏协程(t *testing.T) {
 	c.MySQL.ReadTimeout = 50 * time.Millisecond
 
 	const rounds = 5
-	before := settle()
+	before := stabilize()
 	for i := 0; i < rounds; i++ {
 		db, closer, err := New(c)
 		if err == nil {
@@ -54,7 +61,7 @@ func TestNew_连不上时不漏协程(t *testing.T) {
 
 	// 必须等协程真正退出再数：连接池关闭后它的 opener 协程是异步退出的，
 	// 立刻去数会把「正在退出」当成「泄漏」，也会把真泄漏淹没在噪声里
-	if after := settle(); after > before+1 {
+	if after := settleTo(before); after > before+1 {
 		t.Errorf("建连失败 %d 次后协程数从 %d 涨到 %d，说明连接池没被关掉", rounds, before, after)
 	}
 }
@@ -254,7 +261,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	bad.DialTimeout, bad.MySQL.ReadTimeout = 30*time.Millisecond, 30*time.Millisecond
 	cfg = Config{Clients: map[string]ClientConfig{"a": bad, "b": bad}}
 
-	before := settle()
+	before := stabilize()
 	_, err := initAll()
 	if err == nil {
 		t.Fatal("连不上时应当报错")
@@ -262,7 +269,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	if !strings.Contains(err.Error(), `"a"`) {
 		t.Errorf("错误里应点名是哪个实例，got=%v", err)
 	}
-	if after := settle(); after > before+1 {
+	if after := settleTo(before); after > before+1 {
 		t.Errorf("回滚不干净，协程数从 %d 涨到 %d", before, after)
 	}
 }
@@ -293,7 +300,7 @@ func TestSettle_能看见泄漏的连接池(t *testing.T) {
 	// 于是「不漏协程」那条测试怎么改都通过——一条永远不会失败的测试
 	// 比没有测试更糟，它让人以为查过了。
 	addr := deadAddr(t)
-	before := settle()
+	before := stabilize()
 
 	const leaked = 5
 	pools := make([]*sql.DB, 0, leaked)
@@ -308,25 +315,22 @@ func TestSettle_能看见泄漏的连接池(t *testing.T) {
 		pools = append(pools, pool)
 	}
 
-	if during := settle(); during <= before {
+	if during := settleTo(before); during <= before {
 		t.Fatalf("漏了 %d 个连接池却没看出协程增长（%d -> %d），这把尺子是坏的", leaked, before, during)
 	}
 	for _, p := range pools {
 		p.Close()
 	}
-	if after := settle(); after > before+1 {
+	if after := settleTo(before); after > before+1 {
 		t.Errorf("全关掉之后应当回落，got %d -> %d", before, after)
 	}
 }
 
-// settle 等协程数稳定下来再返回，避免把「正在退出」当成泄漏
-//
-// 连接池关闭后 database/sql 的 opener 协程是异步退出的，
-// 关完立刻数一定偏高，而那个偏高会把真正的泄漏一起淹掉。
-func settle() int {
+// stabilize 等协程数不再变化，用来取一个基准值
+func stabilize() int {
 	last := runtime.NumGoroutine()
 	stable := 0
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 200; i++ {
 		time.Sleep(50 * time.Millisecond)
 		n := runtime.NumGoroutine()
 		if n == last {
@@ -338,4 +342,19 @@ func settle() int {
 		last, stable = n, 0
 	}
 	return last
+}
+
+// settleTo 等协程数回落到 target 附近，最多等 10 秒，超时返回实际值。
+//
+// 不能用「连续几次读数相同」当作稳定：后台协程是一批批退出的，
+// 中间会有好几百毫秒纹丝不动，那时候读三次都一样，却离回落还远。
+// 上一版就是这么误报的——它在半路上就宣布「稳定了，还剩 8 个」。
+func settleTo(target int) int {
+	for i := 0; i < 200; i++ {
+		if n := runtime.NumGoroutine(); n <= target+1 {
+			return n
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return runtime.NumGoroutine()
 }
