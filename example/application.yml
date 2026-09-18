@@ -15,3 +15,6 @@ XMetric:
   Namespace: demo
   ConstLabels:
     env: "${ENV:dev}"
+
+XGin:
+  Port: 8080

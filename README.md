@@ -83,7 +83,9 @@ github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
 ├── xcache                           独立 module，11 个模块
 ├── xhttp                            独立 module，54 个模块
 ├── xredis                           独立 module，55 个模块
-└── xgorm                            独立 module，62 个模块
+├── xgorm                            独立 module，62 个模块
+├── xgin                             独立 module，83 个模块
+└── xginswagger                      独立 module，82 个模块
 ```
 
 **你不用的集成，它的依赖不会进你的模块图**，它要求的 Go 版本也不会。
@@ -92,6 +94,10 @@ github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
 
 零依赖的集成（如 `xlog`）留在核心模块里：分模块是为了把依赖挡在使用者之外，
 没有依赖可挡就不必多一个模块。
+
+同一条线也用在模块内部：Swagger UI 要把整套前端资源编进二进制，比只用 gin
+多 26 个模块，所以它是 `xginswagger` 而不是 `xgin` 的一部分——
+文档是开发期的事，不该让每个线上服务都背着。
 
 注意**测试依赖也算数**：`go mod tidy` 会把它记成直接依赖，一样进使用者的模块图。
 实测给 `xtrace` 加一个只用于测试的 `otelhttp`，使用者的模块图从 23 涨到 27。
@@ -162,6 +168,8 @@ xtow/
 ├── xredis/              Redis，基于 go-redis（独立 module）
 ├── xcache/              本地缓存，基于 ristretto（独立 module）
 ├── xhttp/               出站 HTTP，基于 resty（独立 module）
+├── xgin/                Web 服务，基于 Gin，内置四个中间件（独立 module）
+├── xginswagger/         Swagger UI（独立 module，UI 资源不进普通服务）
 ├── example/             可直接跑的示例，同时是唯一的跨模块集成测试
 ├── check.sh             把设计约束编译成检查
 └── test.sh              跑全仓库测试（go test ./... 不跨模块边界）
@@ -180,7 +188,7 @@ registry 与基础包零第三方依赖、`init()` 只出现在集成包里、�
 | 0 | 地基：registry / config / 根包 / check.sh | 完成 |
 | 1 | xapp / xlog / xtrace / xmetric | 完成 |
 | 2 | xgorm / xredis / xcache / xhttp | 完成 |
-| 3 | xgin 及中间件 | 待做 |
+| 3 | xgin 及中间件、xginswagger | 完成 |
 | 4 | xflow、文档、打 v0.1 tag | 待做 |
 
 各模块都还没打 tag，子模块用 `replace` 指向仓库内的相对路径。
