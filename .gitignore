@@ -1,0 +1,7 @@
+# 本地多模块开发用，不进版本库
+go.work
+go.work.sum
+
+# 构建产物
+/bin/
+*.out

@@ -1,0 +1,225 @@
+package xtow
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/xiaoshicae/xtow/registry"
+)
+
+// ---- 测试替身：不用 mock，都是普通类型 ----
+
+type recorder struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (r *recorder) add(s string) { r.mu.Lock(); r.seq = append(r.seq, s); r.mu.Unlock() }
+func (r *recorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.seq, " → ")
+}
+
+type closer struct {
+	name string
+	r    *recorder
+	err  error
+}
+
+func (c *closer) Close() error { c.r.add("close:" + c.name); return c.err }
+
+// comp 造一个登记项：初始化时记一笔，返回的 Closer 关闭时记一笔
+func comp(key string, stage registry.Stage, r *recorder, initErr error) registry.Component {
+	return registry.Component{
+		Key:   key,
+		Stage: stage,
+		Init: func() (io.Closer, error) {
+			r.add("init:" + key)
+			if initErr != nil {
+				return nil, initErr
+			}
+			return &closer{name: key, r: r}, nil
+		},
+	}
+}
+
+type server struct {
+	r       *recorder
+	stopped chan struct{}
+	startEr error
+}
+
+func newServer(r *recorder) *server { return &server{r: r, stopped: make(chan struct{})} }
+
+func (s *server) Start(context.Context) error {
+	s.r.add("start:server")
+	if s.startEr != nil {
+		return s.startEr
+	}
+	<-s.stopped
+	return nil
+}
+
+func (s *server) Stop(context.Context) error {
+	s.r.add("stop:server")
+	close(s.stopped)
+	return nil
+}
+
+func emptyConf(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "application.yml")
+	os.WriteFile(p, []byte(""), 0o600)
+	return p
+}
+
+// ---- 用例 ----
+
+func TestRun_逆序关闭(t *testing.T) {
+	r := &recorder{}
+	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
+
+	err := Run(newServer(r),
+		WithConfigPath(emptyConf(t)),
+		withComponents(comp("a", registry.StageClient, r, nil), comp("b", registry.StageClient, r, nil)))
+	if err != nil {
+		t.Fatalf("正常退出不该有错误: %v", err)
+	}
+
+	want := "init:a → init:b → start:server → stop:server → close:b → close:a"
+	if got := r.String(); got != want {
+		t.Errorf("关闭顺序不对\n got=%s\nwant=%s", got, want)
+	}
+}
+
+func TestRun_Stage决定顺序而非登记顺序(t *testing.T) {
+	// 这是整套设计的核心主张：init() 的执行顺序（也就是登记顺序）不影响结果
+	r := &recorder{}
+	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
+
+	// 故意按「反的」顺序登记
+	err := Run(newServer(r),
+		WithConfigPath(emptyConf(t)),
+		withComponents(
+			comp("client", registry.StageClient, r, nil),
+			comp("trace", registry.StageTrace, r, nil),
+			comp("log", registry.StageLog, r, nil),
+		))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(r.String(), "init:log → init:trace → init:client") {
+		t.Errorf("应按 Stage 升序初始化，与登记顺序无关，got=%s", r.String())
+	}
+	if !strings.HasSuffix(r.String(), "close:client → close:trace → close:log") {
+		t.Errorf("关闭应是初始化的严格逆序，got=%s", r.String())
+	}
+}
+
+func TestRun_同档内保持登记顺序(t *testing.T) {
+	r := &recorder{}
+	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
+
+	_ = Run(newServer(r), WithConfigPath(emptyConf(t)),
+		withComponents(
+			comp("first", registry.StageClient, r, nil),
+			comp("second", registry.StageClient, r, nil),
+		))
+	if !strings.HasPrefix(r.String(), "init:first → init:second") {
+		t.Errorf("同一档内应保持登记顺序（稳定排序），got=%s", r.String())
+	}
+}
+
+func TestRun_组件初始化失败时回滚已初始化的部分(t *testing.T) {
+	r := &recorder{}
+	boom := errors.New("连不上")
+
+	err := Run(newServer(r), WithConfigPath(emptyConf(t)),
+		withComponents(
+			comp("ok", registry.StageClient, r, nil),
+			comp("bad", registry.StageClient, r, boom),
+		))
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("应返回初始化失败的原始错误，got=%v", err)
+	}
+	if got := r.String(); got != "init:ok → init:bad → close:ok" {
+		t.Errorf("失败时应逆序关闭已初始化的部分，且不启动 server，got=%s", got)
+	}
+}
+
+func TestRun_服务启动失败(t *testing.T) {
+	r := &recorder{}
+	boom := errors.New("端口被占用")
+	s := newServer(r)
+	s.startEr = boom
+
+	err := Run(s, WithConfigPath(emptyConf(t)), withComponents(comp("a", registry.StageClient, r, nil)))
+	if !errors.Is(err, boom) {
+		t.Fatalf("应返回服务启动错误，got=%v", err)
+	}
+	if !strings.Contains(r.String(), "close:a") {
+		t.Errorf("服务起不来时组件也要被关掉，got=%s", r.String())
+	}
+}
+
+func TestRun_关闭出错会被汇总而不是吞掉(t *testing.T) {
+	r := &recorder{}
+	closeErr := errors.New("关不掉")
+	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
+
+	err := Run(newServer(r), WithConfigPath(emptyConf(t)),
+		withComponents(registry.Component{
+			Key:  "stuck",
+			Init: func() (io.Closer, error) { return &closer{name: "stuck", r: r, err: closeErr}, nil },
+		}))
+
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("关闭错误应被返回，got=%v", err)
+	}
+}
+
+func TestRun_组件panic被隔离(t *testing.T) {
+	r := &recorder{}
+	err := Run(newServer(r), WithConfigPath(emptyConf(t)),
+		withComponents(registry.Component{
+			Key:  "panicky",
+			Init: func() (io.Closer, error) { panic("初始化炸了") },
+		}))
+
+	if err == nil || !strings.Contains(err.Error(), "panic") {
+		t.Fatalf("组件 panic 应被转成错误而不是打穿进程，got=%v", err)
+	}
+}
+
+func TestRun_显式指定的配置文件不存在是错误(t *testing.T) {
+	r := &recorder{}
+	err := Run(newServer(r), WithConfigPath(filepath.Join(t.TempDir(), "nope.yml")))
+	if err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("点名要的配置文件找不到应当场失败，got=%v", err)
+	}
+}
+
+func TestRun_找不到配置文件时用默认值正常启动(t *testing.T) {
+	r := &recorder{}
+	t.Chdir(t.TempDir()) // 约定路径下什么都没有
+	os.Args = []string{"svc"}
+	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
+
+	if err := Run(newServer(r), withComponents(comp("a", registry.StageClient, r, nil))); err != nil {
+		t.Fatalf("没有配置文件应该只告警、用默认值起，got=%v", err)
+	}
+	if !strings.Contains(r.String(), "init:a") {
+		t.Errorf("组件仍应被初始化，got=%s", r.String())
+	}
+}
