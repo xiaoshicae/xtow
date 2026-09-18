@@ -6,14 +6,31 @@ on:
   pull_request:
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
+          # 取各模块里最高的那个下限。核心自己只要 1.22，
+          # 但集成模块因为上游需要 1.25，CI 得跑得动全部
           go-version: '1.25'
-      - name: 单元测试
-        run: go test -race ./...
-      - name: 设计约束检查
-        run: ./check.sh
+          cache: false
+
+      # 设计约束的检查，内容见 check.sh
+      - run: ./check.sh
+
+      - run: ./test.sh -count=1
+
+  # 核心的下限单独验一遍：check.sh 跑在装了新版工具链的机器上，
+  # 不会告诉你核心是不是真的还能用 1.22 编译
+  core-go-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+      - run: GOTOOLCHAIN=local GOWORK=off go build ./...
+      - run: GOTOOLCHAIN=local GOWORK=off go vet ./...

@@ -65,7 +65,17 @@ for d in $integrations; do
 done
 echo "✓ 集成包检查通过（$(echo "$integrations" | wc -w) 个）"
 
-# ---- 7. 基本卫生 ----
+# ---- 7. 配置字段都写进文档 ----
+# 配置是使用者唯一的操作界面，加了字段却没写文档，等于没加。
+# 反过来文档里多写一个不存在的 key，会让人配了半天发现不生效。
+missing=""
+for f in $(grep -rhoE 'yaml:"[A-Za-z]+"' --include='*.go' --exclude='*_test.go' . | sed 's/yaml:"//; s/"//' | sort -u); do
+  grep -q "\b$f\b" docs/config.md || missing="$missing $f"
+done
+[ -z "$missing" ] || fail "这些配置字段没写进 docs/config.md：$missing"
+echo "✓ 配置字段都写进文档了"
+
+# ---- 8. 基本卫生 ----
 [ -z "$(gofmt -l .)" ] || fail "有文件未格式化：$(gofmt -l .)"
 for m in $modules; do
   (cd "$m" && GOWORK=off go vet ./... >/dev/null 2>&1) || fail "$m go vet 未通过"

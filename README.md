@@ -88,6 +88,8 @@ github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
 └── xginswagger                      独立 module，82 个模块
 ```
 
+`xflow`（流程编排）和 `xlog` 一样零第三方依赖，所以也留在核心里。
+
 **你不用的集成，它的依赖不会进你的模块图**，它要求的 Go 版本也不会。
 除核心外的集成都因为上游而需要 Go 1.25，核心留在 1.22。
 每个集成也能独立升大版本，不会因为某一个要改 API 就逼着整个框架升级。
@@ -170,6 +172,8 @@ xtow/
 ├── xhttp/               出站 HTTP，基于 resty（独立 module）
 ├── xgin/                Web 服务，基于 Gin，内置四个中间件（独立 module）
 ├── xginswagger/         Swagger UI（独立 module，UI 资源不进普通服务）
+├── xflow/               流程编排 + 自动回滚，零第三方依赖
+├── docs/config.md       全部配置项参考
 ├── example/             可直接跑的示例，同时是唯一的跨模块集成测试
 ├── check.sh             把设计约束编译成检查
 └── test.sh              跑全仓库测试（go test ./... 不跨模块边界）
@@ -177,7 +181,11 @@ xtow/
 
 `check.sh` 在 CI 里跑：核心模块图不超过 3 个模块、核心不依赖任何集成模块、
 registry 与基础包零第三方依赖、`init()` 只出现在集成包里、根包公开 API 不超过 15 个、
-集成包必须导出 `New` 且不许 import 根包。
+集成包必须导出 `New` 且不许 import 根包、**每个配置字段都写进了 `docs/config.md`**。
+
+`release.sh` 打 tag：多模块仓库每个 module 有自己的 tag，
+发布前要把开发用的 `replace` 换成真实版本号，且必须按依赖顺序发。
+默认只打印要做什么，加 `--apply` 才真的改。
 
 ---
 
@@ -189,6 +197,7 @@ registry 与基础包零第三方依赖、`init()` 只出现在集成包里、�
 | 1 | xapp / xlog / xtrace / xmetric | 完成 |
 | 2 | xgorm / xredis / xcache / xhttp | 完成 |
 | 3 | xgin 及中间件、xginswagger | 完成 |
-| 4 | xflow、文档、打 v0.1 tag | 待做 |
+| 4 | xflow、文档、CI、发布脚本 | 完成 |
+| — | 打 v0.1.0 tag | 待人工确认 |
 
 各模块都还没打 tag，子模块用 `replace` 指向仓库内的相对路径。
