@@ -60,7 +60,8 @@ for d in $integrations; do
   ! grep -rq '"github.com/xiaoshicae/xtow"' "$d"/*.go || fail "$d 引用了根包（只能 import registry）"
   # 只认领配置、不造任何东西的包（如 xapp）没有构造器可言，这条对它是空的
   grep -rq 'Init:' "$d"/*.go || continue
-  grep -rq '^func New(' "$d"/*.go || fail "$d 登记了 Init，却没有纯构造器 New"
+  # New[T any]( 也算：泛型构造器同样是「绕开框架直接造一个」的入口
+  grep -rqE '^func New[(\[]' "$d"/*.go || fail "$d 登记了 Init，却没有纯构造器 New"
 done
 echo "✓ 集成包检查通过（$(echo "$integrations" | wc -w) 个）"
 
