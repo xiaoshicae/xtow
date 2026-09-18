@@ -360,6 +360,37 @@ func TestLogCounter_数错误日志(t *testing.T) {
 	}
 }
 
+func TestInstall_并发打日志时不该有数据竞争(t *testing.T) {
+	// Install 曾经先把设施发布成 current，再往它身上写 logCounter。
+	// 中间那一段里，任何一条经 xlog 写出的错误日志都会走观察者去读
+	// active().logCounter —— 读的正是一个还在被写的字段。
+	//
+	// 后果不止是 -race 报警：观察者是在 logCounter 赋值之前挂上的，
+	// 所以这段窗口里的错误日志一条都没被计进去，而告警面板上看不出区别。
+	install(t, func(c *Config) { c.LogErrorMetric = true }) // 先挂上观察者
+	l := logThrough(t)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				l.Error("并发写")
+			}
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		install(t, func(c *Config) { c.LogErrorMetric = true })
+	}
+	close(stop)
+	<-done
+}
+
 func TestLogCounter_不动全局logger(t *testing.T) {
 	// 回归用例。曾经的实现是「把 slog.Default() 包一层再设回去」，
 	// 而 slog.SetDefault 顺带把标准库 log 包的输出也接到新 handler 上：

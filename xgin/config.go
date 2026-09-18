@@ -56,10 +56,13 @@ type Config struct {
 	// IdleTimeout keep-alive 连接的空闲超时。默认 60s。
 	IdleTimeout time.Duration `yaml:"IdleTimeout"`
 
-	// ShutdownTimeout 优雅退出的等待上限。默认 25s。
+	// ShutdownTimeout 优雅退出的等待上限。默认 25s，必须大于 0。
 	//
 	// 要小于部署环境给的终止宽限期（K8s 默认 30s）：两者相等意味着
 	// Shutdown 还没走完进程就被 SIGKILL，等于没有优雅退出。
+	//
+	// 注意 0 不是「不限时」而是「一点都不等」：它会让 Shutdown 拿到一个
+	// 已经过期的 context，在途请求当场被切断。所以这里拦住它。
 	ShutdownTimeout time.Duration `yaml:"ShutdownTimeout"`
 
 	// Mode Gin 的运行模式：release / debug / test。默认 release。
@@ -91,6 +94,11 @@ func (c Config) validate() error {
 	// 而配置文件看上去是配了证书的
 	if (c.CertFile == "") != (c.KeyFile == "") {
 		return fmt.Errorf("CertFile 和 KeyFile 必须同时配置或同时留空")
+	}
+	// 0 在这里不是「不限时」而是「一点都不等」：Shutdown 会拿到一个已经过期的
+	// context，在途请求当场被切断，而配置文件看上去只是没设上限
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("ShutdownTimeout 必须大于 0（0 不是不限时，是一点都不等），got=%v", c.ShutdownTimeout)
 	}
 	switch c.Mode {
 	case "release", "debug", "test":

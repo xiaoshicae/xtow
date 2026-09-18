@@ -101,18 +101,42 @@ func headers() map[string]bool {
 var newlines = strings.NewReplacer("\r\n", "", "\r", "", "\n", "")
 
 // RedactBody 按 Content-Type 脱敏请求体
+//
+// Content-Type 先转小写：这个头按 RFC 9110 是大小写不敏感的，
+// 照字面比的话 "Application/JSON" 就走不进 JSON 那一支。
+//
+// JSON 的判断是「含 json」而不是精确匹配 application/json：
+// application/vnd.api+json、application/problem+json、text/json
+// 都是 JSON，精确匹配会把它们整个漏过去。认错了也不会更糟——
+// 解不出 JSON 的那一支本来就是整个遮掉。
 func RedactBody(body []byte, contentType string) string {
 	if len(body) == 0 {
 		return ""
 	}
+	ct := strings.ToLower(contentType)
 	switch {
-	case strings.Contains(contentType, "application/json"):
+	case strings.Contains(ct, "json"):
 		return redactJSON(body)
-	case strings.Contains(contentType, "x-www-form-urlencoded"):
+	case strings.Contains(ct, "x-www-form-urlencoded"):
 		return redactForm(string(body))
 	default:
-		return newlines.Replace(string(body))
+		return redactOpaque(body)
 	}
+}
+
+// redactOpaque 处理认不出结构的 body（text/plain、xml、没带 Content-Type 的……）
+//
+// 定位不了具体字段，但「里面有没有敏感字段名」是看得出来的。有就整个遮掉。
+// 这与 JSON 那一支解析失败时的处理是同一条规矩：定位不了就不能放行。
+//
+// 这里只做字面扫描，不像 JSON 那样见到反斜杠就一律当作可疑：
+// 反斜杠是 JSON 的转义语法，纯文本里它就是个普通字符，
+// 一条带 Windows 路径的日志不该因此被整段遮掉。
+func redactOpaque(body []byte) string {
+	if _, names := fields(); containsFieldLiteral(body, names) {
+		return Redacted
+	}
+	return newlines.Replace(string(body))
 }
 
 // redactJSON 解析 JSON 并遮掉敏感字段
@@ -150,9 +174,11 @@ func redactJSON(body []byte) string {
 // 这种 body 会走快路径原样进日志——密码明文落盘，而且不会有任何迹象。
 // 所以只要出现反斜杠就交给解析器，由它把转义还原成真实的 key。
 func mayContainField(body []byte, names [][]byte) bool {
-	if bytes.IndexByte(body, '\\') >= 0 {
-		return true
-	}
+	return bytes.IndexByte(body, '\\') >= 0 || containsFieldLiteral(body, names)
+}
+
+// containsFieldLiteral 字面扫描，忽略 ASCII 大小写
+func containsFieldLiteral(body []byte, names [][]byte) bool {
 	for i := 0; i < len(body); i++ {
 		for _, n := range names {
 			if hasPrefixFold(body[i:], n) {

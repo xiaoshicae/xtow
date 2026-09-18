@@ -132,6 +132,65 @@ func TestRedactBody_其它类型去掉换行(t *testing.T) {
 	}
 }
 
+func TestRedactBody_JSON的各种写法都走脱敏(t *testing.T) {
+	// 之前是精确匹配 application/json，于是 +json 的各种子类型、
+	// text/json、以及大写写法全都绕过了脱敏 —— 密码原样进日志。
+	// Content-Type 按 RFC 9110 本就是大小写不敏感的。
+	body := []byte(`{"password":"hunter2"}`)
+	for _, ct := range []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"application/vnd.api+json",
+		"application/problem+json",
+		"application/ld+json",
+		"text/json",
+		"Application/JSON",
+		"APPLICATION/JSON; CHARSET=UTF-8",
+	} {
+		got := RedactBody(body, ct)
+		if strings.Contains(got, "hunter2") {
+			t.Errorf("Content-Type=%q 漏遮了密码，got=%s", ct, got)
+		}
+	}
+}
+
+func TestRedactBody_表单大写写法也走脱敏(t *testing.T) {
+	got := RedactBody([]byte("password=hunter2"), "Application/X-WWW-Form-Urlencoded")
+	if strings.Contains(got, "hunter2") {
+		t.Errorf("大写的 Content-Type 同样应脱敏，got=%s", got)
+	}
+}
+
+func TestRedactBody_认不出结构时有敏感字段名就整个遮掉(t *testing.T) {
+	// text/plain、xml、没带 Content-Type 的 body 都定位不到具体字段，
+	// 但「里面有没有敏感字段名」看得出来。有就整个遮掉 ——
+	// 与 JSON 解析失败时是同一条规矩：定位不了就不能放行。
+	for _, ct := range []string{"text/plain", "application/xml", "text/xml", ""} {
+		got := RedactBody([]byte("<user><password>hunter2</password></user>"), ct)
+		if got != Redacted {
+			t.Errorf("Content-Type=%q 应整个遮掉，got=%s", ct, got)
+		}
+	}
+}
+
+func TestRedactBody_认不出结构且没有敏感字段名时原样保留(t *testing.T) {
+	// 过度遮蔽会把排查信息一起抹掉，只在确实出现敏感字段名时才动手
+	const body = "just a plain note about the weather"
+	if got := RedactBody([]byte(body), "text/plain"); got != body {
+		t.Errorf("没有敏感字段名就该原样保留，got=%s", got)
+	}
+}
+
+func TestRedactBody_纯文本里的反斜杠不触发整体遮蔽(t *testing.T) {
+	// 反斜杠是 JSON 的转义语法，纯文本里它就是个普通字符。
+	// 照搬 JSON 那条「见到反斜杠一律可疑」的规矩，
+	// 一条带 Windows 路径的日志会被整段遮掉
+	const body = `open failed: C:\Users\app\data.txt`
+	if got := RedactBody([]byte(body), "text/plain"); got != body {
+		t.Errorf("纯文本里的反斜杠不该触发整体遮蔽，got=%s", got)
+	}
+}
+
 func TestRedactBody_空body(t *testing.T) {
 	if got := RedactBody(nil, "application/json"); got != "" {
 		t.Errorf("空 body 应返回空串，got=%q", got)

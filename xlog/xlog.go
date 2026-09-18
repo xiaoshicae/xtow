@@ -19,7 +19,14 @@ import (
 // 返回的 io.Closer 用于收尾（关闭日志文件），即便没有文件输出也不会是 nil，
 // 调用方不必判空。
 func New(cfg Config) (*slog.Logger, io.Closer, error) {
+	// 配置项全部先校验完，再动文件。反过来的话，Format 写错时
+	// 日志文件已经建好、fd 也开着，而 New 返回了错误——调用方手上
+	// 没有 Closer 可关，那个 fd 和它的符号链接就留在那里了
 	level, err := parseLevel(cfg.Level)
+	if err != nil {
+		return nil, nil, err
+	}
+	newHandler, err := handlerFor(cfg.Format)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -42,28 +49,29 @@ func New(cfg Config) (*slog.Logger, io.Closer, error) {
 	// 一个输出都没开时写到 io.Discard 而不是报错：
 	// 「我就是不要日志」是个合理的选择，不该让服务起不来
 	var out io.Writer = io.Discard
-	switch len(writers) {
-	case 1:
+	switch {
+	case len(writers) == 1:
 		out = writers[0]
-	default:
-		if len(writers) > 1 {
-			out = io.MultiWriter(writers...)
-		}
+	case len(writers) > 1:
+		out = io.MultiWriter(writers...)
 	}
 
 	opts := &slog.HandlerOptions{Level: level, AddSource: cfg.AddSource}
-	var h slog.Handler
-	switch strings.ToLower(cfg.Format) {
-	case FormatText:
-		h = slog.NewTextHandler(out, opts)
-	case FormatJSON, "":
-		h = slog.NewJSONHandler(out, opts)
-	default:
-		return nil, nil, xerror.Newf("xlog", "new",
-			"不认识的日志格式 Format=[%s]，可选 %s / %s", cfg.Format, FormatJSON, FormatText)
-	}
+	return slog.New(newCtxHandler(newHandler(out, opts))), multiCloser(closers), nil
+}
 
-	return slog.New(newCtxHandler(h)), multiCloser(closers), nil
+// handlerFor 按格式选出 handler 的构造函数。
+// 只认格式、不碰输出，好让格式写错这件事在打开日志文件之前就暴露。
+func handlerFor(format string) (func(io.Writer, *slog.HandlerOptions) slog.Handler, error) {
+	switch strings.ToLower(format) {
+	case FormatText:
+		return func(w io.Writer, o *slog.HandlerOptions) slog.Handler { return slog.NewTextHandler(w, o) }, nil
+	case FormatJSON, "":
+		return func(w io.Writer, o *slog.HandlerOptions) slog.Handler { return slog.NewJSONHandler(w, o) }, nil
+	default:
+		return nil, xerror.Newf("xlog", "new",
+			"不认识的日志格式 Format=[%s]，可选 %s / %s", format, FormatJSON, FormatText)
+	}
 }
 
 // newFileWriter 造文件写入器，目录不存在时创建

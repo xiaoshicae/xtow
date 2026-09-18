@@ -85,6 +85,24 @@ func emptyConf(t *testing.T) string {
 
 // ---- 用例 ----
 
+func TestRun_停止预算为零直接失败(t *testing.T) {
+	// 0 在这里不是「不限时」而是「一点都不等」：Stop 拿到的是一个已经过期的
+	// context，服务当场被切断，后面每个组件的关闭也都在超时状态下跑。
+	// 这种配错必须在做任何事之前就拦住
+	started := false
+	r := &lateRunnable{
+		start: func(context.Context) error { started = true; return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+	err := Run(r, withComponents(), WithLogger(quietLogger()), WithStopTimeout(0))
+	if err == nil {
+		t.Fatal("停止预算为 0 应当直接报错")
+	}
+	if started {
+		t.Error("报错之前不该已经把服务启动起来")
+	}
+}
+
 func TestRun_逆序关闭(t *testing.T) {
 	r := &recorder{}
 	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()

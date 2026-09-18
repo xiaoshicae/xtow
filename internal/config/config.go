@@ -109,6 +109,7 @@ func decodeStrict(node *yaml.Node, target any) error {
 // 环境变量的值里若含冒号或换行，文本替换会改变 YAML 结构。
 func expand(n *yaml.Node, missing *[]string) {
 	if n.Kind == yaml.ScalarNode && strings.Contains(n.Value, "${") {
+		before := n.Value
 		n.Value = placeholder.ReplaceAllStringFunc(n.Value, func(m string) string {
 			idx := placeholder.FindStringSubmatchIndex(m)
 			name := m[idx[2]:idx[3]]
@@ -121,8 +122,35 @@ func expand(n *yaml.Node, missing *[]string) {
 			*missing = append(*missing, name)
 			return m
 		})
+		if n.Value != before {
+			retag(n)
+		}
 	}
 	for _, c := range n.Content {
 		expand(c, missing)
 	}
+}
+
+// retag 让替换过的标量按新内容重新判定类型。
+//
+// 解析的时候整个 ${PORT:8080} 是一段文本，所以这个标量被打上了 !!str。
+// 替换之后它的内容是 8080，标签却还留在 !!str 上，于是
+//
+//	Port: ${PORT:8080}
+//
+// 会以「cannot unmarshal !!str into int」失败——占位符因此只能用在字符串字段上，
+// 而文档里它是一条通用规则。清掉标签，让 yaml 按替换后的内容重新判定即可。
+//
+// 这不会让环境变量的值改变 YAML 结构：重新判定的对象仍是这一个标量，
+// 序列化时 yaml 会按内容自己选引号，值里的冒号、换行、星号都留在标量内部。
+//
+// 两种情况保持原样：
+//   - 使用者显式加了引号或写了标签（Style 非 0），那是明确的「按字符串处理」，
+//     数字形态的密码、版本号都指望它；
+//   - 替换结果为空，重新判定会变成 null，把结构体里预填的默认值清成零值。
+func retag(n *yaml.Node) {
+	if n.Style != 0 || n.Value == "" {
+		return
+	}
+	n.Tag = ""
 }

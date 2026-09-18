@@ -146,6 +146,29 @@ func TestDecodeClients_两种写法不能混用(t *testing.T) {
 	if !strings.Contains(err.Error(), "混用") {
 		t.Errorf("错误该说清楚为什么，got=%v", err)
 	}
+	// 还要点名是哪个字段没了归属，否则一个几十行的配置块看不出改哪里
+	if !strings.Contains(err.Error(), "Addr") {
+		t.Errorf("错误该指出是哪个字段，got=%v", err)
+	}
+}
+
+func TestDecodeClients_实例里拼错不该被报成混用(t *testing.T) {
+	// 「不能混用」这句话曾经是套在任何一个解码错误上的：实例里一个字段拼错
+	// （Clients.x.Adrr）报的也是它。那份配置根本没混用，使用者会照着这句话
+	// 去改一个没问题的地方，真正的拼写错误反而被这句提示盖住了。
+	cases := map[string]string{
+		"实例里字段拼错": "Clients:\n  x: {Adrr: a}\n",
+		"实例里类型不对": "Clients:\n  x: {Max: abc}\n",
+	}
+	for name, src := range cases {
+		_, err := clients(t, src)
+		if err == nil {
+			t.Fatalf("%s：应当报错", name)
+		}
+		if strings.Contains(err.Error(), "混用") {
+			t.Errorf("%s：这不是混用，不该这么报，got=%v", name, err)
+		}
+	}
 }
 
 func TestDecodeClients_空的Clients要报错(t *testing.T) {

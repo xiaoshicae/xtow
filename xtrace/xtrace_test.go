@@ -156,6 +156,39 @@ func TestNew_矛盾的透传配置直接失败(t *testing.T) {
 	}
 }
 
+func TestNew_停止预算为零直接失败(t *testing.T) {
+	// 0 不是「不限时」而是「一点都不等」：Shutdown 拿到一个已经过期的 context，
+	// 缓冲区里还没发出去的 Span 直接丢掉，而配置文件看上去只是没设上限
+	c := DefaultConfig()
+	c.ShutdownTimeout = 0
+	if _, _, err := New(c); err == nil {
+		t.Fatal("ShutdownTimeout=0 应当报错")
+	}
+}
+
+func TestNew_采样率为零仍然生成并透传TraceID(t *testing.T) {
+	// 「不采样」和「关掉链路」是两件事：写 0 时 Span 照常创建、TraceID 照常
+	// 生成，只是不落地——下游拿得到 TraceID，本地不存 Span。
+	// 要连 Span 都不产生请用 Enable: false
+	c := DefaultConfig()
+	c.SampleRatio = 0
+	tr, closer, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	_, span := tr.TracerProvider.Tracer("t").Start(context.Background(), "s")
+	defer span.End()
+	sc := span.SpanContext()
+	if !sc.IsValid() {
+		t.Fatal("采样率为 0 时 SpanContext 仍应有效，否则 TraceID 传不下去")
+	}
+	if sc.IsSampled() {
+		t.Error("采样率为 0 时不该被采样")
+	}
+}
+
 func TestSamplerOf(t *testing.T) {
 	if got := samplerOf(1).Description(); got != sdktrace.AlwaysSample().Description() {
 		t.Errorf("比例 >=1 应全采样，got=%s", got)
@@ -346,6 +379,42 @@ func TestAddSpanProcessor(t *testing.T) {
 			t.Errorf("关闭后注册的应进待办队列，got=%d", n)
 		}
 	})
+}
+
+func TestAddSpanProcessor_与初始化并发也不会被吞(t *testing.T) {
+	// 注册分两支：初始化前进 pending 等着被取走，初始化后直接挂到 live 上。
+	// 如果取 pending 和装 live 之间放开了锁，落在那个窗口里的注册两边都不占——
+	// 它进了一个再也不会被读的 pending，然后被静默丢掉。
+	// 这是一次完全无声的失败：Span 照常产生，只是永远到不了上报端。
+	for i := 0; i < 50; i++ {
+		resetRegistration(t)
+
+		rec := &recorder{}
+		var closer io.Closer
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); closer = initComponent(t) }()
+		go func() { defer wg.Done(); AddSpanProcessor(rec) }()
+		wg.Wait()
+
+		// 无论两者谁先，注册完成之后处理器都该是挂上了的：
+		// 要么被 Init 从 pending 里取走，要么直接挂到了 live 上
+		mu.Lock()
+		leftover := len(pending)
+		mu.Unlock()
+		if leftover > 0 {
+			closer.Close()
+			t.Fatalf("第 %d 轮：处理器落在窗口里没人认领，pending 还剩 %d 个", i, leftover)
+		}
+
+		_, span := otel.Tracer("t").Start(context.Background(), "s")
+		span.End()
+		got := len(rec.names())
+		closer.Close()
+		if got == 0 {
+			t.Fatalf("第 %d 轮：处理器被吞了，一个 Span 都没收到", i)
+		}
+	}
 }
 
 func TestRegister_登记内容与框架对得上(t *testing.T) {

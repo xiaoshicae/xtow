@@ -172,11 +172,14 @@ func (o *logOptions) shouldSkip(path string) bool {
 }
 
 // isText 判断是不是适合直接记进日志的文本类型
+//
+// json 用子串匹配，与 RedactBody 保持一致：application/vnd.api+json、
+// application/problem+json 都是 JSON，精确匹配会让这些响应体一声不响地不记。
 func isText(contentType string) bool {
 	ct := strings.ToLower(contentType)
-	return strings.Contains(ct, "application/json") ||
+	return strings.Contains(ct, "json") ||
 		strings.Contains(ct, "text/") ||
-		strings.Contains(ct, "application/xml")
+		strings.Contains(ct, "xml")
 }
 
 // snapshotBody 取一份请求体副本，不影响后续读取。

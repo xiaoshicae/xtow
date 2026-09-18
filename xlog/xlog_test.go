@@ -78,6 +78,29 @@ func TestNew_格式写错当场报错(t *testing.T) {
 	}
 }
 
+func TestNew_失败时不留下已经打开的日志文件(t *testing.T) {
+	// 格式校验曾经排在打开文件之后：New 返回错误，可日志文件已经建好、
+	// fd 也开着，而调用方手上没有 Closer 可关 —— 那个 fd 和它的符号链接
+	// 就一直留在那里。配置项应当全部校验完再动文件。
+	c, _ := fileCfg(t)
+	c.Format = "xml"
+	if _, _, err := New(c); err == nil {
+		t.Fatal("不认识的格式应该报错")
+	}
+
+	entries, err := os.ReadDir(c.File.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("New 失败不该留下任何文件，got=%v", names)
+	}
+}
+
 func TestNew_权限写错当场报错(t *testing.T) {
 	c, _ := fileCfg(t)
 	c.File.Perm = "rw-r--r--"

@@ -62,6 +62,16 @@ func New(cfg Config) (*Metrics, io.Closer, error) {
 // 让 Error 及以上级别的日志自动计入 log_errors_total。
 // 包的是 slog.Default()，不是本框架的某个类型——不用 xlog 也一样生效。
 func (m *Metrics) Install() {
+	// 先把 logCounter 填好，最后才发布 —— 顺序反过来的话，current 已经指向
+	// 本实例、而 logCounter 还在被写，这中间每一条错误日志都在读一个
+	// 正在被写的字段。不只是 -race 会报：观察者是在赋值之前就挂上的，
+	// 所以那段窗口里的错误日志一条都计不进去，面板上看不出任何区别。
+	//
+	// 发布走的是 mu，读的一侧 active() 也走 mu，赋值因此对读者可见。
+	if m.cfg.LogErrorMetric {
+		m.logCounter = newLogCounter(m)
+	}
+
 	mu.Lock()
 	current = m
 	mu.Unlock()
@@ -71,10 +81,6 @@ func (m *Metrics) Install() {
 	if n := clearCollectors(); n > 0 {
 		slog.Warn("xmetric 初始化之前已有打点，那些值记在临时 registry 上、不会被导出",
 			"指标数", n)
-	}
-
-	if m.cfg.LogErrorMetric {
-		m.logCounter = newLogCounter(m)
 	}
 }
 

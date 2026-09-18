@@ -15,6 +15,8 @@
 | 多配了没人认领的块 | **启动失败**，并提示可能是忘了 import 对应的包 |
 | `${VAR}` | 必填，未设置则启动失败。凭证类配置都该写成这个形式 |
 | `${VAR:default}` | 可选，未设置时用默认值 |
+| 占位符的类型 | 按替换后的内容判定，`Port: ${PORT:8080}` 进的是 int 字段。加了引号就固定按字符串处理，数字形态的密码用 `"${PW}"` |
+| 超时写 0 | **不是「不限时」而是「一点都不等」**。`XGin.ShutdownTimeout`、`XTrace.ShutdownTimeout`、`XFlow.RollbackTimeout` 写 0 直接启动失败 |
 | 列表字段 | 文件里写了就整体替换，不会和默认值混在一起 |
 | map 字段 | 文件里写的是**合并**进默认值，所以框架的 map 字段一律没有默认值 |
 
@@ -57,8 +59,9 @@ XLog:
 XTrace:
   Enable: true             # 默认开。关掉后 Span 是 noop，但 Header 透传照常生效
   Console: false           # 把 Span 打到标准输出，本地调试用，默认关
-  SampleRatio: 1           # (0, 1]，>= 1 全采样。要关链路请用 Enable: false
-  ShutdownTimeout: 5s      # 退出时等导出完成的上限，默认 5s
+  SampleRatio: 1           # >= 1 全采样；0 是「不采样但照常生成透传 TraceID」
+                           # 要连 Span 都不产生请用 Enable: false，那是另一件事
+  ShutdownTimeout: 5s      # 退出时等导出完成的上限，默认 5s，必须 > 0
   ForwardHeaders:          # 向所有下游透传的 Header，默认无
     - X-Request-Id
   ForwardHeaderRules:      # 只发给匹配域名的 Header，默认无
@@ -198,7 +201,7 @@ XGin:
   ReadTimeout: 0s          # 默认不限制：限制它会打断大文件上传
   WriteTimeout: 0s         # 默认不限制：限制它会打断 SSE、长轮询、大文件下载
   IdleTimeout: 60s
-  ShutdownTimeout: 25s     # 要小于部署环境的终止宽限期（K8s 默认 30s）
+  ShutdownTimeout: 25s     # 要小于部署环境的终止宽限期（K8s 默认 30s），必须 > 0
 ```
 
 中间件的开关不在配置里，在代码里：

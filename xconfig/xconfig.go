@@ -19,6 +19,7 @@ package xconfig
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -74,17 +75,39 @@ func DecodeClients[C any](n *yaml.Node, defaults func() C) (map[string]C, error)
 		return map[string]C{DefaultClientName: single}, nil
 	}
 
+	// 混用先自己认出来，别指望从解码错误里读。
+	// 交给解码器的话，实例里一个字段拼错（Clients.default.DSNN）报的也是
+	// 「不能混用」——而那份配置根本没混用，使用者会照着这句话去改一个没问题的地方。
+	if stray := keysExcept(n, clientsKey); len(stray) > 0 {
+		return nil, fmt.Errorf("单实例和多实例两种写法不能混用：写了 %s 之后，%s 就没有归属了——"+
+			"把它们移进某个实例里，或者删掉 %s 改用单实例写法",
+			clientsKey, strings.Join(stray, "、"), clientsKey)
+	}
+
 	var multi struct {
 		Clients map[string]C `yaml:"Clients"`
 	}
 	if err := DecodeStrict(n, &multi); err != nil {
-		return nil, fmt.Errorf("%w（单实例和多实例两种写法不能混用：写了 %s 就把所有字段都放进去）",
-			err, clientsKey)
+		return nil, err
 	}
 	if len(multi.Clients) == 0 {
 		return nil, fmt.Errorf("%s 是空的：要么写上实例，要么整块删掉", clientsKey)
 	}
 	return multi.Clients, nil
+}
+
+// keysExcept 列出 mapping 里除 except 之外的 key，保持书写顺序
+func keysExcept(node *yaml.Node, except string) []string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if k := node.Content[i].Value; k != except {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 const (

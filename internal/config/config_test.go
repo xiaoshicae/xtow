@@ -156,6 +156,95 @@ func TestLoad_占位符(t *testing.T) {
 	})
 }
 
+func TestLoad_占位符填非字符串字段(t *testing.T) {
+	// 文档把 ${VAR} 写成一条通用规则，那它就得对所有字段类型成立。
+	// 解析时整个 ${PORT:8080} 是一段文本，标量因此被打上 !!str；
+	// 替换之后不重新判定类型的话，这些字段全都以
+	// "cannot unmarshal !!str into int" 失败——占位符沦为字符串字段专用。
+	type demo struct {
+		Retries int           `yaml:"Retries"`
+		Enable  bool          `yaml:"Enable"`
+		Ratio   float64       `yaml:"Ratio"`
+		Timeout time.Duration `yaml:"Timeout"`
+		Addr    string        `yaml:"Addr"`
+	}
+
+	t.Run("用默认值", func(t *testing.T) {
+		os.Unsetenv("XTOW_T_N1")
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		body := "Demo:\n  Retries: ${XTOW_T_N1:7}\n  Enable: ${XTOW_T_N1:true}\n" +
+			"  Ratio: ${XTOW_T_N1:0.25}\n  Timeout: ${XTOW_T_N1:90s}\n  Addr: ${XTOW_T_N1:h:1}\n"
+		if err := Load(write(t, body), list); err != nil {
+			t.Fatal(err)
+		}
+		want := demo{Retries: 7, Enable: true, Ratio: 0.25, Timeout: 90 * time.Second, Addr: "h:1"}
+		if c != want {
+			t.Errorf("got=%+v want=%+v", c, want)
+		}
+	})
+
+	t.Run("取环境变量", func(t *testing.T) {
+		t.Setenv("XTOW_T_N2", "42")
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Retries: ${XTOW_T_N2}\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Retries != 42 {
+			t.Errorf("Retries 应取自环境变量，got=%d", c.Retries)
+		}
+	})
+
+	t.Run("裸数字进时长字段照样报错", func(t *testing.T) {
+		// 重新判定类型不能顺手把这条保证放掉：${T:30} 和直接写 30 是一回事，
+		// 写的人想要 30 秒，不是 30 纳秒
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Timeout: ${XTOW_T_N3:30}\n"), list); err == nil {
+			t.Fatal("占位符里的裸数字同样应当报错")
+		}
+	})
+
+	t.Run("加了引号就仍按字符串处理", func(t *testing.T) {
+		// 数字形态的密码、版本号指望这一条：显式引号是明确的意图，不该被重新判定
+		t.Setenv("XTOW_T_N4", "0123456")
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Addr: \"${XTOW_T_N4}\"\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Addr != "0123456" {
+			t.Errorf("引号里的值应原样进字符串字段，got=%q", c.Addr)
+		}
+	})
+
+	t.Run("不加引号的数字进字符串字段也不丢前导零", func(t *testing.T) {
+		t.Setenv("XTOW_T_N5", "0123456")
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Addr: ${XTOW_T_N5}\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Addr != "0123456" {
+			t.Errorf("重新判定类型不该改变字符串字段读到的内容，got=%q", c.Addr)
+		}
+	})
+
+	t.Run("空值不重新判定", func(t *testing.T) {
+		// "" 重新判定会变成 null，把结构体里预填的默认值清成零值
+		t.Setenv("XTOW_T_N6", "")
+		c := demo{Retries: 3}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Addr: ${XTOW_T_N6}\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Addr != "" || c.Retries != 3 {
+			t.Errorf("got=%+v", c)
+		}
+	})
+}
+
 func TestLoad_占位符的值含特殊字符不破坏结构(t *testing.T) {
 	// 在解析后的节点上展开，而不是对原始字节做文本替换 —— 否则这是条注入路径
 	t.Setenv("XTOW_T_INJECT", "a: b\nEvil: true")
@@ -165,6 +254,15 @@ func TestLoad_占位符的值含特殊字符不破坏结构(t *testing.T) {
 	}
 	if c.Addr != "a: b\nEvil: true" {
 		t.Errorf("环境变量的值应原样进字段，不该被当成 YAML 解析，got=%q", c.Addr)
+	}
+
+	// 不加引号时标量会被重新判定类型，那一步同样不能让值逃出标量本身
+	list2, c2 := comps(t)
+	if err := Load(write(t, "Demo:\n  Addr: ${XTOW_T_INJECT}\n"), list2); err != nil {
+		t.Fatal(err)
+	}
+	if c2.Addr != "a: b\nEvil: true" {
+		t.Errorf("重新判定类型后仍应是一个标量，got=%q", c2.Addr)
 	}
 }
 

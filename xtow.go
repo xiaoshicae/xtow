@@ -26,11 +26,20 @@ type Runnable interface {
 	Stop(context.Context) error
 }
 
+// defaultStopTimeout 所有组件共享的停止预算默认值
+const defaultStopTimeout = 15 * time.Second
+
 // Run 读配置、初始化全部组件、启动 r，阻塞到退出信号，然后逆序关闭。
 func Run(r Runnable, opts ...Option) error {
-	o := options{stopTimeout: 15 * time.Second}
+	o := options{stopTimeout: defaultStopTimeout}
 	for _, f := range opts {
 		f(&o)
+	}
+	// 0 在这里不是「不限时」而是「一点都不等」：Stop 会拿到一个已经过期的
+	// context，服务当场被切断，后面每个组件的关闭也都在超时状态下跑。
+	// 让它在做任何事之前就失败，好过退出时才发现没有优雅退出这回事
+	if o.stopTimeout <= 0 {
+		return fmt.Errorf("xtow: 停止预算必须大于 0（0 不是不限时，是一点都不等），got=%v", o.stopTimeout)
 	}
 
 	list := o.components
@@ -92,14 +101,16 @@ func Run(r Runnable, opts ...Option) error {
 
 // loadConfigInto 定位并加载配置。
 //
-// 显式指定的路径找不到是错误——那是使用者点名要的；
-// 自动查找一个都没命中则只告警，全用默认值起，这对一个没有任何外部依赖的
+// 点名要的路径（WithConfigPath、--config、XTOW_CONFIG）找不到是错误；
+// 约定路径一个都没命中则只告警，全用默认值起——这对一个没有任何外部依赖的
 // 服务是合理的。两者的区别与「你要的」和「约定俗成的」一致。
+//
+// Locate 只在文件确实存在时才返回约定路径，所以下面那次判存只会落在
+// 点名要的路径上，不需要再分一次支。
 func loadConfigInto(list []registry.Component, o options) error {
-	path, explicit := o.configPath, o.configPath != ""
-	if !explicit {
+	path := o.configPath
+	if path == "" {
 		path = config.Locate()
-		explicit = path != "" && !isSearchPath(path)
 	}
 
 	if path == "" {
@@ -114,16 +125,6 @@ func loadConfigInto(list []registry.Component, o options) error {
 
 	o.log().Info("加载配置", "文件", path)
 	return config.Load(path, list)
-}
-
-// isSearchPath 判断路径是不是自动查找命中的约定位置
-func isSearchPath(path string) bool {
-	for _, p := range config.SearchPaths {
-		if p == path {
-			return true
-		}
-	}
-	return false
 }
 
 type named struct {
@@ -214,7 +215,10 @@ func (o options) log() *slog.Logger {
 
 type Option func(*options)
 
-func WithConfigPath(p string) Option         { return func(o *options) { o.configPath = p } }
+func WithConfigPath(p string) Option { return func(o *options) { o.configPath = p } }
+
+// WithStopTimeout 设置所有组件共享的停止预算，默认 15s。必须大于 0——
+// 0 不是「不限时」而是「一点都不等」，Run 会直接返回错误。
 func WithStopTimeout(d time.Duration) Option { return func(o *options) { o.stopTimeout = d } }
 func WithLogger(l *slog.Logger) Option       { return func(o *options) { o.logger = l } }
 

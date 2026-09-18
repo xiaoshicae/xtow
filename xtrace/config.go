@@ -7,7 +7,10 @@
 //   - HeaderPropagator —— 按配置透传自定义 Header，如 X-Request-Id
 package xtrace
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // ConfigKey 本模块在配置文件里的顶层 key
 const ConfigKey = "XTrace"
@@ -33,15 +36,20 @@ type Config struct {
 	// Console 是否把 Span 打到标准输出，仅用于本地调试。默认关闭。
 	Console bool `yaml:"Console"`
 
-	// SampleRatio 采样率，取值 (0, 1]，>= 1 全采样。默认 1。
+	// SampleRatio 采样率，>= 1 全采样。默认 1。
 	//
-	// 要完全关闭链路请用 Enable: false。这里写 0 会被当成没配。
+	// 写 0 是「新链路一条都不采」，但 Span 照常创建、TraceID 照常生成和透传——
+	// 想让下游拿得到 TraceID、本地又不落 Span 时就这么配。
+	// 要连 Span 都不产生（noop provider）请用 Enable: false，那是另一件事。
 	SampleRatio float64 `yaml:"SampleRatio"`
 
-	// ShutdownTimeout 关闭时等待 Span 导出完成的上限。默认 5s。
+	// ShutdownTimeout 关闭时等待 Span 导出完成的上限。默认 5s，必须大于 0。
 	//
 	// 必须有上限：导出端不可达时 Shutdown 会一直阻塞，
 	// 没有 deadline 就是退出时挂死。
+	//
+	// 同样地，0 不是「不限时」而是「一点都不等」：Shutdown 拿到的是一个
+	// 已经过期的 context，缓冲区里还没发出去的 Span 会被直接丢掉。
 	ShutdownTimeout time.Duration `yaml:"ShutdownTimeout"`
 
 	// ForwardHeaders 向所有域名透传的 Header。默认无。
@@ -60,6 +68,15 @@ func DefaultConfig() Config {
 		SampleRatio:     1,
 		ShutdownTimeout: 5 * time.Second,
 	}
+}
+
+// validate 检查配置本身说不通的地方
+func (c Config) validate() error {
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("xtrace: 配置有误: ShutdownTimeout 必须大于 0"+
+			"（0 不是不限时，是一点都不等，缓冲区里的 Span 会被丢掉），got=%v", c.ShutdownTimeout)
+	}
+	return nil
 }
 
 // forwardEnabled 是否配置了 Header 透传

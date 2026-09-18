@@ -54,6 +54,10 @@ func (t *Tracing) Install() {
 // 返回的 io.Closer 永不为 nil，关闭时会把 Span 冲刷出去，
 // 等待上限由 cfg.ShutdownTimeout 控制。
 func New(cfg Config, procs ...sdktrace.SpanProcessor) (*Tracing, io.Closer, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, nil, err
+	}
+
 	prop, err := newPropagator(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -241,30 +245,41 @@ func detach() {
 	mu.Unlock()
 }
 
+// initTracing 取走待办的 SpanProcessor、装好链路设施、挂上 provider。
+//
+// 全程持锁。取待办和装 provider 之间一旦放开，落在那个窗口里的
+// AddSpanProcessor 两边都不占：它看到 live 还是 nil，于是追加到一个
+// 已经被取走、再也不会被读的 pending 上，然后被静默丢掉——
+// Span 照常产生，只是永远到不了上报端，没有任何迹象。
+// 代价只是并发的注册方要等初始化走完，那本来就是它该等的。
+func initTracing() (io.Closer, error) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	procs := pending
+	pending = nil
+
+	t, closer, err := New(cfg, procs...)
+	if err != nil {
+		// 没装起来，把待办还回去：调用方多半会让启动失败，
+		// 但万一它选择继续，这些处理器不该凭空消失
+		pending = procs
+		return nil, err
+	}
+	t.Install()
+
+	if tp, ok := t.TracerProvider.(*sdktrace.TracerProvider); ok {
+		live = tp
+	}
+	return closer, nil
+}
+
 // init 只登记，不初始化。真正的初始化由框架在 StageTelemetry 执行。
 func init() {
 	registry.Register(registry.Component{
 		Key:    ConfigKey,
 		Stage:  registry.StageTelemetry,
 		Config: &cfg,
-		Init: func() (io.Closer, error) {
-			mu.Lock()
-			procs := pending
-			pending = nil
-			mu.Unlock()
-
-			t, closer, err := New(cfg, procs...)
-			if err != nil {
-				return nil, err
-			}
-			t.Install()
-
-			if tp, ok := t.TracerProvider.(*sdktrace.TracerProvider); ok {
-				mu.Lock()
-				live = tp
-				mu.Unlock()
-			}
-			return closer, nil
-		},
+		Init:   initTracing,
 	})
 }

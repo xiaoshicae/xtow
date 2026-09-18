@@ -264,6 +264,22 @@ func TestStart_配置非法时不监听(t *testing.T) {
 	}
 }
 
+func TestValidate_停止预算为零要拦住(t *testing.T) {
+	// 0 在这里不是「不限时」而是「一点都不等」：Shutdown 拿到的是一个已经
+	// 过期的 context，在途请求当场被切断，而配置文件看上去只是没设上限。
+	// xflow 的 RollbackTimeout 早就按这条规矩拦了，这里漏掉了
+	c := DefaultConfig()
+	c.ShutdownTimeout = 0
+	if err := c.validate(); err == nil {
+		t.Fatal("ShutdownTimeout=0 应当报错")
+	}
+
+	withConfig(t, func(c *Config) { c.ShutdownTimeout = 0 })
+	if err := New().Start(context.Background()); err == nil {
+		t.Fatal("配置非法时不该起服务")
+	}
+}
+
 func TestStart_信号早于启动到达(t *testing.T) {
 	// 照常监听的话，服务会在「已经收到停止信号」之后才起来，
 	// 然后一直跑到框架等超时为止
