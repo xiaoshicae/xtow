@@ -1,0 +1,17 @@
+App:
+  Name: xone.demo.app
+  Version: v0.1.0
+
+XLog:
+  Level: info
+  Format: json
+
+XTrace:
+  SampleRatio: 1
+  ForwardHeaders:
+    - X-Request-Id
+
+XMetric:
+  Namespace: demo
+  ConstLabels:
+    env: "${ENV:dev}"
