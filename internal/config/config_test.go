@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -248,4 +249,54 @@ func TestLoad_没人认领的顶层key要报错(t *testing.T) {
 	if !strings.Contains(err.Error(), "XGrom") {
 		t.Errorf("错误里要指出是哪个 key，got=%v", err)
 	}
+}
+
+func TestLoad_默认值的覆盖语义(t *testing.T) {
+	// 默认值预填在结构体里，所以「文件里写了会发生什么」必须钉死。
+	// 两种容器的行为不一样，写默认值的人必须知道
+	type demo struct {
+		Buckets []float64         `yaml:"Buckets"`
+		Labels  map[string]string `yaml:"Labels"`
+	}
+	fresh := func() demo {
+		return demo{
+			Buckets: []float64{1, 2, 3},
+			Labels:  map[string]string{"pre": "filled"},
+		}
+	}
+
+	t.Run("切片是整体替换", func(t *testing.T) {
+		c := fresh()
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Buckets: [0.1, 1]\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(c.Buckets, []float64{0.1, 1}) {
+			t.Errorf("配了就该整体换掉，不能和默认值混在一起，got=%v", c.Buckets)
+		}
+	})
+
+	t.Run("map 是合并而不是替换", func(t *testing.T) {
+		// 所以 map 类型的字段不要预填默认值：使用者删不掉预填的条目。
+		// 这条钉在这里，免得哪天有人给 ConstLabels 之类加个「合理的默认」
+		c := fresh()
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Labels:\n    a: \"1\"\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Labels["pre"] != "filled" {
+			t.Errorf("map 的默认值不会被覆盖掉，这正是不该给 map 预填默认值的原因，got=%v", c.Labels)
+		}
+	})
+
+	t.Run("没配的字段保持默认", func(t *testing.T) {
+		c := fresh()
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo: {}\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(c.Buckets, []float64{1, 2, 3}) {
+			t.Errorf("没配就该保持默认，got=%v", c.Buckets)
+		}
+	})
 }

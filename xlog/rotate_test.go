@@ -280,7 +280,7 @@ func TestWarnf写到stderr(t *testing.T) {
 	os.Stderr = old
 	f.Close()
 
-	if got := readFile(t, f.Name()); !strings.Contains(got, "xlog rotate: 出事了 file=[a.log]") {
+	if got := readFile(t, f.Name()); !strings.Contains(got, "xlog: 出事了 file=[a.log]") {
 		t.Errorf("stderr 内容不对，got=%q", got)
 	}
 }

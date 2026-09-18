@@ -241,11 +241,11 @@ func detach() {
 	mu.Unlock()
 }
 
-// init 只登记，不初始化。真正的初始化由框架在 StageTrace 执行。
+// init 只登记，不初始化。真正的初始化由框架在 StageTelemetry 执行。
 func init() {
 	registry.Register(registry.Component{
 		Key:    ConfigKey,
-		Stage:  registry.StageTrace,
+		Stage:  registry.StageTelemetry,
 		Config: &cfg,
 		Init: func() (io.Closer, error) {
 			mu.Lock()

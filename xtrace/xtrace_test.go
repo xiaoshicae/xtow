@@ -359,7 +359,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	if got == nil {
 		t.Fatalf("没有以 %s 登记", ConfigKey)
 	}
-	if got.Stage != registry.StageTrace {
+	if got.Stage != registry.StageTelemetry {
 		t.Errorf("链路要早于各类客户端就绪，否则它们的 Span 挂不上，got=%v", got.Stage)
 	}
 	if got.Config != &cfg {

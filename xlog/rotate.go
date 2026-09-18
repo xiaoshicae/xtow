@@ -120,7 +120,7 @@ func (w *rotateWriter) reportRotateFailure(err error) {
 	now := w.clock()
 	if w.lastRotateErrAt.IsZero() || now.Sub(w.lastRotateErrAt) >= rotateErrLogInterval {
 		w.lastRotateErrAt = now
-		warnf("rotate failed, keep writing current file=[%s], err=[%v]", w.currentName, err)
+		warnf("rotate: failed, keep writing current file=[%s], err=[%v]", w.currentName, err)
 	}
 }
 
@@ -158,7 +158,7 @@ func (w *rotateWriter) rotateTo(name string) error {
 	if w.file != nil {
 		// 旧文件关闭失败不影响继续写入新文件，仅记录
 		if cerr := w.file.Close(); cerr != nil {
-			warnf("close previous file failed, err=[%v]", cerr)
+			warnf("rotate: close previous file failed, err=[%v]", cerr)
 		}
 	}
 	w.file = f
@@ -179,11 +179,11 @@ func (w *rotateWriter) updateSymlink(target string) {
 	tmp := w.linkName + ".tmp"
 	_ = os.Remove(tmp)
 	if err := os.Symlink(filepath.Base(target), tmp); err != nil {
-		warnf("create symlink failed, link=[%s], err=[%v]", tmp, err)
+		warnf("rotate: create symlink failed, link=[%s], err=[%v]", tmp, err)
 		return
 	}
 	if err := os.Rename(tmp, w.linkName); err != nil {
-		warnf("replace symlink failed, link=[%s], err=[%v]", w.linkName, err)
+		warnf("rotate: replace symlink failed, link=[%s], err=[%v]", w.linkName, err)
 		_ = os.Remove(tmp)
 	}
 }
@@ -196,7 +196,7 @@ func (w *rotateWriter) purge(current string) {
 
 	matches, err := filepath.Glob(w.base + ".*")
 	if err != nil {
-		warnf("glob log files failed, err=[%v]", err)
+		warnf("rotate: glob log files failed, err=[%v]", err)
 		return
 	}
 
@@ -218,7 +218,7 @@ func (w *rotateWriter) purge(current string) {
 			continue
 		}
 		if err := os.Remove(path); err != nil {
-			warnf("remove expired log failed, file=[%s], err=[%v]", path, err)
+			warnf("rotate: remove expired log failed, file=[%s], err=[%v]", path, err)
 		}
 	}
 }
@@ -255,9 +255,9 @@ func truncateInLocation(t time.Time, d time.Duration) time.Time {
 	return time.Date(base.Year(), base.Month(), base.Day(), base.Hour(), base.Minute(), base.Second(), base.Nanosecond(), t.Location())
 }
 
-// warnf 把轮转器自身的故障直接写到 stderr
+// warnf 把日志系统自身的故障直接写到 stderr
 //
-// 不能走日志系统：它正是日志系统的底层写入器，出错时再调用它就成了环。
+// 不能走日志系统：出错的正是它，再调用它就成了环。
 func warnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "xlog rotate: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "xlog: "+format+"\n", args...)
 }

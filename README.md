@@ -50,7 +50,7 @@ xtow 把它们拆开：`init()` 只把「我是谁、我要哪段配置、怎么
 同一档里的组件本来就互不依赖。
 
 ```
-StageLog → StageTrace → StageClient → StageServer
+StageLog → StageTelemetry → StageClient → StageServer
 ```
 
 关闭是严格逆序。

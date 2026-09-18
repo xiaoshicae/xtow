@@ -27,6 +27,81 @@ func SetTraceExtractor(f TraceExtractor) {
 	traceExtractor.Store(&f)
 }
 
+// Observer 观察每一条实际写出的日志。由 xmetric 之类的包注入。
+//
+// 只在日志通过级别过滤、真的要写出去时才被调用，收到的记录与写进输出的是同一条。
+// 观察者里 panic 会被隔离：观测出问题不该把日志本身打断。
+//
+// 这是个只增不减的列表——观察者随进程存活，没有注销一说。
+type Observer func(ctx context.Context, r slog.Record)
+
+var observers atomic.Pointer[[]Observer]
+
+// AddObserver 注入一个日志观察者。
+//
+// xmetric 用它统计 Error 级别的日志条数，而不必反过来让 xlog 认识 Prometheus。
+//
+// 为什么不是在外面包一层 slog.Handler：slog.SetDefault 会把标准库 log 包的输出
+// 也接到新 handler 上，于是「包一层再设回去」可能绕成环——
+// 记录经 log.Output 又流回同一个 handler，卡死在 log 包那把不可重入的锁上。
+// 让 xlog 自己持有扩展点就没有这个问题。
+func AddObserver(o Observer) {
+	if o == nil {
+		return
+	}
+	for {
+		old := observers.Load()
+		next := make([]Observer, 0, lenOf(old)+1)
+		if old != nil {
+			next = append(next, *old...)
+		}
+		next = append(next, o)
+		if observers.CompareAndSwap(old, &next) {
+			return
+		}
+	}
+}
+
+func lenOf(p *[]Observer) int {
+	if p == nil {
+		return 0
+	}
+	return len(*p)
+}
+
+// notify 把记录交给所有观察者，逐个隔离 panic
+func notify(ctx context.Context, r slog.Record) {
+	p := observers.Load()
+	if p == nil {
+		return
+	}
+	for _, o := range *p {
+		callObserver(o, ctx, r)
+	}
+}
+
+func callObserver(o Observer, ctx context.Context, r slog.Record) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			warnf("observer panic: %v", rec)
+		}
+	}()
+	o(ctx, r)
+}
+
+// TraceIDs 返回当前 ctx 对应的链路标识，即本包会往日志里写的那两个值。
+//
+// 给需要链路标识、但不想依赖 OpenTelemetry 的包用——比如 xmetric
+// 要拿它做 exemplar，好让指标能跳转到对应的链路。
+// 没有注入提取器、或 ctx 里没有有效 Span 时返回两个空串。
+func TraceIDs(ctx context.Context) (traceID, spanID string) {
+	f := traceExtractor.Load()
+	if f == nil || ctx == nil {
+		return "", ""
+	}
+	return (*f)(ctx)
+}
+
 // groupOrAttrs 记录一次 WithGroup 或 WithAttrs 调用，用于在开过分组时重放调用链
 type groupOrAttrs struct {
 	group string      // 非空表示这是一次 WithGroup
@@ -59,6 +134,8 @@ func (h *ctxHandler) Enabled(ctx context.Context, l slog.Level) bool {
 }
 
 func (h *ctxHandler) Handle(ctx context.Context, r slog.Record) error {
+	notify(ctx, r)
+
 	attrs := ctxAttrs(ctx)
 	if len(attrs) == 0 {
 		return h.next.Handle(ctx, r) // 常见情况：没有任何 ctx 字段，零额外开销

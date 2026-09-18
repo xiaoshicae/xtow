@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -432,5 +433,70 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(files[0]); !strings.Contains(string(b), "经全局默认 logger") {
 		t.Errorf("文件内容不对，got=%q", b)
+	}
+}
+
+func TestTraceIDs(t *testing.T) {
+	// 给不想依赖 OpenTelemetry、又需要链路标识的包用（xmetric 拿它做 exemplar）
+	t.Cleanup(func() { SetTraceExtractor(nil) })
+
+	if id, sp := TraceIDs(context.Background()); id != "" || sp != "" {
+		t.Errorf("没注入提取器时应返回空，got=%q %q", id, sp)
+	}
+	SetTraceExtractor(func(context.Context) (string, string) { return "t1", "s1" })
+	if id, sp := TraceIDs(context.Background()); id != "t1" || sp != "s1" {
+		t.Errorf("应返回提取器给的值，got=%q %q", id, sp)
+	}
+	if id, sp := TraceIDs(nil); id != "" || sp != "" { //nolint:staticcheck // 故意传 nil
+		t.Errorf("nil ctx 不该 panic，got=%q %q", id, sp)
+	}
+}
+
+func TestAddObserver(t *testing.T) {
+	// xmetric 靠它统计错误日志，而不必反过来让 xlog 认识 Prometheus
+	old := observers.Load()
+	t.Cleanup(func() { observers.Store(old) })
+	observers.Store(nil)
+
+	var seen []string
+	AddObserver(func(_ context.Context, r slog.Record) { seen = append(seen, r.Level.String()+":"+r.Message) })
+	AddObserver(nil) // 忽略，不该炸
+
+	c, _ := fileCfg(t)
+	c.Level = "warn"
+	l, closer, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Info("被级别挡掉")
+	l.Warn("警告")
+	l.Error("错误")
+	closer.Close()
+
+	want := []string{"WARN:警告", "ERROR:错误"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Errorf("观察者只该收到实际写出的日志，got=%v want=%v", seen, want)
+	}
+}
+
+func TestAddObserver_panic不打断日志(t *testing.T) {
+	old := observers.Load()
+	t.Cleanup(func() { observers.Store(old) })
+	observers.Store(nil)
+
+	AddObserver(func(context.Context, slog.Record) { panic("炸了") })
+	var reached bool
+	AddObserver(func(context.Context, slog.Record) { reached = true })
+
+	c, path := fileCfg(t)
+	l, closer, _ := New(c)
+	l.Error("出事了")
+	closer.Close()
+
+	if !reached {
+		t.Error("一个观察者 panic 不该影响后面的观察者")
+	}
+	if got := readLines(t, path)[0]; got["msg"] != "出事了" {
+		t.Errorf("观察者 panic 了，日志本身还得写出去，got=%v", got)
 	}
 }

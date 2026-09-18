@@ -111,7 +111,7 @@ func TestRun_Stage决定顺序而非登记顺序(t *testing.T) {
 		WithConfigPath(emptyConf(t)),
 		withComponents(
 			comp("client", registry.StageClient, r, nil),
-			comp("trace", registry.StageTrace, r, nil),
+			comp("trace", registry.StageTelemetry, r, nil),
 			comp("log", registry.StageLog, r, nil),
 		))
 	if err != nil {

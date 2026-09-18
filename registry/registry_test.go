@@ -36,7 +36,7 @@ func TestSnapshotIsCopy(t *testing.T) {
 
 func TestStageOrder(t *testing.T) {
 	// 档位的相对顺序是框架的承诺，写死在测试里防止有人随手调整枚举
-	if !(StageLog < StageTrace && StageTrace < StageClient && StageClient < StageServer) {
+	if !(StageLog < StageTelemetry && StageTelemetry < StageClient && StageClient < StageServer) {
 		t.Fatal("档位顺序必须是 Log < Trace < Client < Server")
 	}
 }

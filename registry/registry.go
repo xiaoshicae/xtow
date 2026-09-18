@@ -16,10 +16,18 @@ import (
 type Stage int
 
 const (
-	StageLog    Stage = iota // 日志：最先起、最后关
-	StageTrace               // 链路、指标
-	StageClient              // 数据库、缓存、HTTP 客户端
-	StageServer              // 对外服务
+	// StageLog 日志：最先起、最后关，这样其余组件的启停日志都写得出去
+	StageLog Stage = iota
+
+	// StageTelemetry 链路与指标：要在任何客户端之前就绪，
+	// 客户端发出的 Span 才挂得上、打的指标才收得到
+	StageTelemetry
+
+	// StageClient 数据库、缓存、HTTP 客户端等被服务依赖的东西
+	StageClient
+
+	// StageServer 对外服务：最后起、最先关
+	StageServer
 )
 
 // Component 一个可被托管的组件。
