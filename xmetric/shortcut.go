@@ -132,10 +132,14 @@ func collectorOf[T prometheus.Collector](key, name string, build func() T) T {
 	}
 
 	c := build()
-	registered := Register(c)
-	if typed, ok := registered.(T); ok {
+	registered, err := Register(c)
+	switch typed, ok := registered.(T); {
+	case err != nil:
+		// 只能记一笔：打点是运行期调用，这里没有「让启动失败」这个选项
+		slog.Error("xmetric 指标注册失败，通过它记录的值不会被导出", "指标", name, "错误", err)
+	case ok:
 		c = typed
-	} else {
+	default:
 		logNameConflict(name, registered)
 	}
 

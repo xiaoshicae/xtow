@@ -1,6 +1,7 @@
 package xmetric
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -121,7 +122,11 @@ func MustRegister(cs ...prometheus.Collector) { Registry().MustRegister(cs...) }
 // Register 注册 collector，已注册过同名同标签的则复用已有实例而不是 panic。
 //
 // 返回实际生效的那个 collector——可能不是传进来的这个，务必用返回值。
-func Register(c prometheus.Collector) prometheus.Collector {
+//
+// 同名但类型或标签不同时返回错误。那种情况下传进来的这个 collector
+// 不在 registry 里，通过它记的值永远导不出去；调用方要么让启动失败，
+// 要么至少知道自己在往空气里写。
+func Register(c prometheus.Collector) (prometheus.Collector, error) {
 	return register(Registry(), c)
 }
 
@@ -148,19 +153,18 @@ func HTTPDurationBuckets() []float64 { return slices.Clone(active().cfg.HTTPDura
 func Namespace() string { return active().cfg.Namespace }
 
 // register 注册 collector，重复注册时复用已有实例
-func register(reg *prometheus.Registry, c prometheus.Collector) prometheus.Collector {
+func register(reg *prometheus.Registry, c prometheus.Collector) (prometheus.Collector, error) {
 	err := reg.Register(c)
 	if err == nil {
-		return c
+		return c, nil
 	}
 	var are prometheus.AlreadyRegisteredError
 	if ok := asAlreadyRegistered(err, &are); ok {
-		return are.ExistingCollector
+		return are.ExistingCollector, nil
 	}
 	// 同名不同标签之类的冲突：这个 collector 不在 registry 里，
-	// 通过它记的值永远导不出去——必须说出来，否则是一次完全静默的数据丢失
-	slog.Error("xmetric 注册指标失败，通过它记录的值不会被导出", "错误", err)
-	return c
+	// 通过它记的值永远导不出去
+	return c, fmt.Errorf("xmetric: 注册指标失败，通过它记录的值不会被导出: %w", err)
 }
 
 type noopCloser struct{}

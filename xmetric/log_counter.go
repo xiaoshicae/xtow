@@ -37,7 +37,11 @@ func newLogCounter(m *Metrics) *prometheus.CounterVec {
 		ConstLabels: labelsOf(m.cfg.ConstLabels),
 	}, []string{"level", "caller"})
 
-	registered := register(m.Registry, counter)
+	registered, err := register(m.Registry, counter)
+	if err != nil {
+		slog.Error("xmetric 日志错误计数器注册失败", "错误", err)
+		return nil
+	}
 	cv, ok := registered.(*prometheus.CounterVec)
 	if !ok {
 		logNameConflict("log_errors_total", registered)

@@ -110,6 +110,21 @@ func TestShortcut_标签顺序不影响复用(t *testing.T) {
 	}
 }
 
+func TestRegister_同名不同类型返回错误(t *testing.T) {
+	// 这种情况下传进来的 collector 不在 registry 里，记的值永远导不出去。
+	// 以前只记一条日志，调用方没法知道，于是启动照样成功、指标永远是空的
+	install(t, nil)
+	MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "conflict", Help: "h"}))
+
+	got, err := Register(prometheus.NewGauge(prometheus.GaugeOpts{Name: "conflict", Help: "别的类型"}))
+	if err == nil {
+		t.Fatal("同名不同类型应当返回错误")
+	}
+	if got == nil {
+		t.Error("即使出错也该返回一个非 nil 的 collector，免得调用方空指针")
+	}
+}
+
 func TestShortcut_同名不同类型不静默(t *testing.T) {
 	// 先 Counter 后 Gauge：第二个注册不进 registry，通过它记的值永远导不出去。
 	// 必须说出来，否则是一次完全静默的数据丢失
@@ -175,11 +190,16 @@ func TestRegister_重复注册复用已有实例(t *testing.T) {
 	install(t, nil)
 	opts := prometheus.CounterOpts{Name: "custom_total", Help: "h"}
 	first := prometheus.NewCounter(opts)
-	if got := Register(first); got != prometheus.Collector(first) {
-		t.Error("首次注册应返回传进去的那个")
+	got, err := Register(first)
+	if err != nil || got != prometheus.Collector(first) {
+		t.Errorf("首次注册应返回传进去的那个，got=%v err=%v", got, err)
 	}
 	second := prometheus.NewCounter(opts)
-	if got := Register(second); got == prometheus.Collector(second) {
+	got, err = Register(second)
+	if err != nil {
+		t.Errorf("同名同标签的重复注册不是错误：%v", err)
+	}
+	if got == prometheus.Collector(second) {
 		t.Error("重复注册应返回已有实例，而不是 panic 或返回新的")
 	}
 }

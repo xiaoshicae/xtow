@@ -277,7 +277,10 @@ func initAll() (io.Closer, error) {
 	}
 
 	if metricEnabled(cfg.Clients) {
-		xmetric.Register(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats))
+		if _, err := xmetric.Register(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
+			// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
+			slog.Error("xgorm 连接池指标注册失败", "错误", err)
+		}
 	}
 	return &groupCloser{closers: closers}, nil
 }

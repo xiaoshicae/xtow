@@ -77,13 +77,17 @@ StageLog → StageTelemetry → StageClient → StageServer
 
 ```
 github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
-├── xlog                             零依赖，所以留在核心里
-├── xtrace                           独立 module，23 个模块，Go 1.25
-└── xmetric                          独立 module，35 个模块，Go 1.25
+├── xapp  xlog  xconfig              零依赖，所以留在核心里
+├── xtrace                           独立 module，23 个模块
+├── xmetric                          独立 module，35 个模块
+├── xcache                           独立 module，11 个模块
+├── xhttp                            独立 module，54 个模块
+├── xredis                           独立 module，55 个模块
+└── xgorm                            独立 module，62 个模块
 ```
 
 **你不用的集成，它的依赖不会进你的模块图**，它要求的 Go 版本也不会。
-上面两个集成都因为上游而需要 Go 1.25，核心不必跟着抬。
+除核心外的集成都因为上游而需要 Go 1.25，核心留在 1.22。
 每个集成也能独立升大版本，不会因为某一个要改 API 就逼着整个框架升级。
 
 零依赖的集成（如 `xlog`）留在核心模块里：分模块是为了把依赖挡在使用者之外，
@@ -125,6 +129,8 @@ func New(cfg Config) (*T, io.Closer, error)   // 不碰全局、不读文件、�
 | 行为 | 说明 |
 |---|---|
 | 默认值 | 预填在结构体里，文件没写的字段保持不变。**不用 `*bool` 指针** |
+| 集合里的默认值 | map / 切片的元素从零值开始解，要默认值就给元素类型写 `UnmarshalYAML`，里面用 `xconfig.DecodeStrict`（**不能用 `node.Decode`，它会丢掉严格检查**） |
+| 多实例 | `XGorm.DSN` 是单实例写法，`XGorm.Clients.<名字>` 是多实例写法，两者不能混用 |
 | 时间 | 直接用 `time.Duration`，YAML 里写 `30s` / `1500ms` |
 | 字段拼错 | **启动失败**，不是静默忽略 |
 | 配了但没人认领的块 | **启动失败**，并提示可能是忘了 import 对应的包 |
@@ -148,9 +154,14 @@ xtow/
 ├── internal/config/     配置加载
 ├── xerror/  xutil/      零第三方依赖
 ├── xapp/                应用身份（名字、版本），只认领配置不初始化
+├── xconfig/             集合元素配置解码的两个辅助函数
 ├── xlog/                日志，基于 log/slog，零第三方依赖
 ├── xtrace/              链路，基于 OpenTelemetry（独立 module）
 ├── xmetric/             指标，基于 Prometheus（独立 module）
+├── xgorm/               数据库，基于 GORM（独立 module）
+├── xredis/              Redis，基于 go-redis（独立 module）
+├── xcache/              本地缓存，基于 ristretto（独立 module）
+├── xhttp/               出站 HTTP，基于 resty（独立 module）
 ├── example/             可直接跑的示例，同时是唯一的跨模块集成测试
 ├── check.sh             把设计约束编译成检查
 └── test.sh              跑全仓库测试（go test ./... 不跨模块边界）
@@ -168,7 +179,7 @@ registry 与基础包零第三方依赖、`init()` 只出现在集成包里、�
 |---|---|---|
 | 0 | 地基：registry / config / 根包 / check.sh | 完成 |
 | 1 | xapp / xlog / xtrace / xmetric | 完成 |
-| 2 | xgorm / xredis / xcache / xhttp | 待做 |
+| 2 | xgorm / xredis / xcache / xhttp | 完成 |
 | 3 | xgin 及中间件 | 待做 |
 | 4 | xflow、文档、打 v0.1 tag | 待做 |
 
