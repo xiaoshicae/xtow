@@ -28,17 +28,11 @@ type Config struct {
 	// AddSource 是否记录打日志的代码位置。有开销，默认关闭。
 	AddSource bool `yaml:"AddSource"`
 
-	// Console 控制台输出
-	Console ConsoleConfig `yaml:"Console"`
+	// Console 是否打到标准输出，由部署环境的日志采集组件收集。默认开启。
+	Console bool `yaml:"Console"`
 
 	// File 文件输出
 	File FileConfig `yaml:"File"`
-}
-
-// ConsoleConfig 控制台输出配置
-type ConsoleConfig struct {
-	// Enable 是否打到标准输出，由部署环境的日志采集组件收集。默认开启。
-	Enable bool `yaml:"Enable"`
 }
 
 // FileConfig 文件输出配置
@@ -73,7 +67,7 @@ func DefaultConfig() Config {
 	return Config{
 		Level:   "info",
 		Format:  FormatJSON,
-		Console: ConsoleConfig{Enable: true},
+		Console: true,
 		File: FileConfig{
 			Name:       "app.log",
 			RotateTime: 24 * time.Hour,

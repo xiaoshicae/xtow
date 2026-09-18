@@ -212,7 +212,7 @@ func TestRun_显式指定的配置文件不存在是错误(t *testing.T) {
 
 func TestRun_找不到配置文件时用默认值正常启动(t *testing.T) {
 	r := &recorder{}
-	t.Chdir(t.TempDir()) // 约定路径下什么都没有
+	chdir(t, t.TempDir()) // 约定路径下什么都没有
 	os.Args = []string{"svc"}
 	go func() { time.Sleep(120 * time.Millisecond); syscall.Kill(syscall.Getpid(), syscall.SIGTERM) }()
 
@@ -222,4 +222,18 @@ func TestRun_找不到配置文件时用默认值正常启动(t *testing.T) {
 	if !strings.Contains(r.String(), "init:a") {
 		t.Errorf("组件仍应被初始化，got=%s", r.String())
 	}
+}
+
+// chdir 切换工作目录，测试结束后切回。见 internal/config 里同名助手的说明：
+// testing.T.Chdir 要 Go 1.24，核心模块的下限不为一个测试助手上抬。
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
 }

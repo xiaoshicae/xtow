@@ -19,7 +19,7 @@ func fileCfg(t *testing.T) (Config, string) {
 	t.Helper()
 	dir := t.TempDir()
 	c := DefaultConfig()
-	c.Console.Enable = false
+	c.Console = false
 	c.File = FileConfig{Enable: true, Path: dir, Name: "app.log",
 		RotateTime: 24 * time.Hour, MaxAge: 7 * 24 * time.Hour, Perm: "0644"}
 	return c, filepath.Join(dir, "app.log")
@@ -49,7 +49,7 @@ func readLines(t *testing.T, path string) []map[string]any {
 func TestNew_级别解析(t *testing.T) {
 	for _, s := range []string{"debug", "info", "warn", "warning", "error", "INFO", " info ", ""} {
 		c := DefaultConfig()
-		c.Console.Enable = false
+		c.Console = false
 		c.Level = s
 		if _, _, err := New(c); err != nil {
 			t.Errorf("级别 %q 应被接受，got=%v", s, err)
@@ -87,7 +87,7 @@ func TestNew_权限写错当场报错(t *testing.T) {
 
 func TestNew_全部输出都关掉也能正常工作(t *testing.T) {
 	c := DefaultConfig()
-	c.Console.Enable = false
+	c.Console = false
 	c.File.Enable = false
 
 	l, closer, err := New(c)
@@ -102,7 +102,7 @@ func TestNew_全部输出都关掉也能正常工作(t *testing.T) {
 
 func TestNew_Closer永不为nil(t *testing.T) {
 	c := DefaultConfig()
-	c.Console.Enable = true
+	c.Console = true
 	c.File.Enable = false
 	_, closer, err := New(c)
 	if err != nil {
@@ -345,7 +345,7 @@ func TestDefaultConfig(t *testing.T) {
 	if c.Level != "info" || c.Format != FormatJSON {
 		t.Errorf("默认应为 info + json，got=%+v", c)
 	}
-	if !c.Console.Enable {
+	if !c.Console {
 		t.Error("控制台默认应开启")
 	}
 	if c.File.Enable {
@@ -414,7 +414,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg = DefaultConfig()
-	cfg.Console.Enable = false
+	cfg.Console = false
 	cfg.File = FileConfig{Enable: true, Path: dir, Name: "app.log", RotateTime: time.Hour, MaxAge: time.Hour}
 
 	closer, err := got.Init()

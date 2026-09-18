@@ -27,7 +27,7 @@ func New(cfg Config) (*slog.Logger, io.Closer, error) {
 	writers := make([]io.Writer, 0, 2)
 	closers := make([]io.Closer, 0, 1)
 
-	if cfg.Console.Enable {
+	if cfg.Console {
 		writers = append(writers, os.Stdout)
 	}
 	if cfg.File.Enable {

@@ -60,7 +60,7 @@ func Load(path string, list []registry.Component) error {
 
 	// 没有任何组件认领的顶层 key —— 多半是拼错了，或者忘了 import 对应的 contrib
 	for key := range sections {
-		if !claimed[key] && key != "Server" {
+		if !claimed[key] {
 			return fmt.Errorf("配置里的 %q 没有任何组件认领：检查拼写，或确认是否 import 了对应的 contrib 包", key)
 		}
 	}

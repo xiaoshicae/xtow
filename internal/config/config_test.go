@@ -193,3 +193,59 @@ func TestLoad_文件不存在(t *testing.T) {
 		t.Fatal("文件不存在应报错")
 	}
 }
+
+func TestLoad_时长字段(t *testing.T) {
+	// 各模块的超时/周期都直接用 time.Duration，靠的是 yaml.v3 原生认识时长字符串。
+	// 这是个横跨所有模块的假设，在这里钉住：改了依赖会先在这里炸，
+	// 而不是等到某个模块的超时悄悄变成 0
+	type demo struct {
+		Timeout time.Duration `yaml:"Timeout"`
+		Rotate  time.Duration `yaml:"Rotate"`
+	}
+
+	t.Run("认识时长字符串", func(t *testing.T) {
+		c := demo{Rotate: 24 * time.Hour} // 预填的默认值
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		if err := Load(write(t, "Demo:\n  Timeout: 1h30m\n"), list); err != nil {
+			t.Fatal(err)
+		}
+		if c.Timeout != 90*time.Minute {
+			t.Errorf("Timeout 应为 90m，got=%v", c.Timeout)
+		}
+		if c.Rotate != 24*time.Hour {
+			t.Errorf("没配的字段应保持默认值，got=%v", c.Rotate)
+		}
+	})
+
+	t.Run("裸数字要报错", func(t *testing.T) {
+		// 写 Timeout: 30 的人想要 30 秒，Go 的零值语义会给他 30 纳秒。
+		// 启动就失败好过线上超时形同虚设
+		c := demo{}
+		list := []registry.Component{{Key: "Demo", Config: &c}}
+		err := Load(write(t, "Demo:\n  Timeout: 30\n"), list)
+		if err == nil {
+			t.Fatal("裸数字应当报错，要求写明单位")
+		}
+		if !strings.Contains(err.Error(), "Demo") {
+			t.Errorf("错误应指明是哪一块配置，got=%v", err)
+		}
+	})
+}
+
+func TestLoad_没人认领的顶层key要报错(t *testing.T) {
+	// 多半是拼错了，或者忘了 import 对应的 contrib 包。
+	// 静默忽略的话，使用者会盯着一份"明明配了"的文件查半天
+	type demo struct {
+		Addr string `yaml:"Addr"`
+	}
+	c := demo{}
+	list := []registry.Component{{Key: "Demo", Config: &c}}
+
+	err := Load(write(t, "Demo:\n  Addr: a\nXGrom:\n  DSN: x\n"), list)
+	if err == nil {
+		t.Fatal("拼错的顶层 key 应当报错")
+	}
+	if !strings.Contains(err.Error(), "XGrom") {
+		t.Errorf("错误里要指出是哪个 key，got=%v", err)
+	}
+}
