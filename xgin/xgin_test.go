@@ -18,6 +18,7 @@ import (
 	"github.com/xiaoshicae/xtow/internal/config"
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xgin/middleware"
+	"github.com/xiaoshicae/xtow/xmetric"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -387,4 +388,75 @@ func waitServing(t *testing.T, url string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("服务没有起来：%s", url)
+}
+
+func TestBuild_先拿Engine再初始化指标也不丢(t *testing.T) {
+	// 回归用例。装配时如果就把 xmetric 的 registry 抓走，而那时 xmetric
+	// 还没初始化，指标会被注册到一个永远不会被导出的兜底 registry 上：
+	// 请求正常处理、指标正常记录、/metrics 里什么都没有，且没有任何迹象。
+	withConfig(t, nil)
+
+	g := New().WithRoutes(func(e *gin.Engine) {
+		e.GET("/x", func(c *gin.Context) { c.Status(200) })
+	})
+	e := g.Engine() // 使用者在 Run 之前拿一下 engine，很自然的写法
+
+	// 此后框架才初始化 xmetric（StageTelemetry 在 StageServer 之前）
+	m, closer, err := xmetric.New(xmetric.Config{Namespace: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	m.Install()
+
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+
+	w := httptest.NewRecorder()
+	m.Handler.ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(w.Body.String(), "demo_http_requests_total") {
+		t.Errorf("指标应记在初始化之后的 registry 上\n实际=\n%s", w.Body.String())
+	}
+}
+
+func TestBuild_先拿Engine也不影响metrics端点(t *testing.T) {
+	// /metrics 的 handler 同理：装配时定死就会一直导出那个空的兜底 registry
+	withConfig(t, nil)
+	g := New()
+	e := g.Engine()
+
+	m, closer, err := xmetric.New(xmetric.Config{Namespace: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	m.Install()
+
+	// 先打一个请求产出指标，再抓 /metrics
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/nope", nil))
+	w := httptest.NewRecorder()
+	e.ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+
+	if !strings.Contains(w.Body.String(), "demo_http_requests_total") {
+		t.Errorf("/metrics 应导出当前生效的 registry\n实际=\n%s", w.Body.String())
+	}
+}
+
+func TestStart_Mode在启动时才设(t *testing.T) {
+	// 装配可能发生在配置加载之前，那时读到的是默认值
+	withConfig(t, func(c *Config) { c.Mode = "debug" })
+	t.Cleanup(func() { gin.SetMode(gin.TestMode) })
+
+	g := New(WithLog(false), WithMetric(false))
+	g.Engine() // 先装配
+	gin.SetMode(gin.TestMode)
+
+	port := freePort(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	go g.Start(context.Background())
+	waitServing(t, fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+	t.Cleanup(func() { g.Stop(context.Background()) })
+
+	if gin.Mode() != gin.DebugMode {
+		t.Errorf("启动时应按配置设 Mode，got=%q", gin.Mode())
+	}
 }

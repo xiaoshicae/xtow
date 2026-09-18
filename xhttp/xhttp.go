@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/xiaoshicae/xtow/registry"
@@ -49,15 +48,11 @@ func New(cfg Config) (*resty.Client, io.Closer, error) {
 	}
 
 	if cfg.Metric {
-		// 用 Register 的返回值：重复注册时它给的是已有那个实例，
+		// 用 RegisterAs 的返回值：重复注册时它给的是已有那个实例，
 		// 记到新建的那个上会永远导不出去
-		registered, err := xmetric.Register(newDurationHistogram())
+		hist, err := xmetric.RegisterAs(newDurationHistogram())
 		if err != nil {
 			return nil, nil, fmt.Errorf("xhttp: %w", err)
-		}
-		hist, ok := registered.(*prometheus.HistogramVec)
-		if !ok {
-			return nil, nil, fmt.Errorf("xhttp: 指标名 http_client_request_duration_seconds 已被注册成 %T", registered)
 		}
 		installMetrics(client, hist)
 	}
@@ -151,6 +146,10 @@ var (
 // fallbackClient 初始化之前或关闭之后用的兜底 client，带超时
 func fallbackClient() *resty.Client { return resty.New().SetTimeout(fallbackTimeout) }
 
+// fallbackRaw 兜底的原生 client。共用一个而不是每次新建：
+// 每次新建意味着每次请求都要重新握手，连接池形同虚设。
+var fallbackRaw = &http.Client{Timeout: fallbackTimeout}
+
 // C 取 resty client。
 //
 // 不像 xgorm / xredis 那样取不到就 panic：HTTP 客户端不连任何外部资源，
@@ -180,7 +179,7 @@ func RawClient() *http.Client {
 	if rawOwned != nil {
 		return rawOwned
 	}
-	return &http.Client{Timeout: fallbackTimeout}
+	return fallbackRaw
 }
 
 // ---- 登记 ----

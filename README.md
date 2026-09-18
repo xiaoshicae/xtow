@@ -115,6 +115,21 @@ func New(cfg Config) (*T, io.Closer, error)   // 不碰全局、不读文件、�
 
 这一条写进了 CI 检查。
 
+### 三个模块共用的那一份
+
+`xgorm` / `xredis` / `xcache` 是同一个形状：配置里可以写一个实例也可以按名字写
+好几个，运行时 `C()` 按名字取，启动时挨个建、有一个建不起来就把已建好的全关掉。
+
+这些语义本该处处一致——「名字找不到时说什么」「两种写法混用怎么办」都是一次决定。
+分散在三个模块里就是三份会各自漂移的实现，所以收进了核心：
+
+| 共用的东西 | 在哪 |
+|---|---|
+| 具名实例注册表、建实例、逆序关闭 | `xclient.Registry` / `xclient.Build` |
+| 单实例 / 多实例两种写法的解码 | `xconfig.DecodeClients` |
+| 带总预算的重试（建连验证用） | `xutil.Retry` |
+| 注册指标并断回具体类型 | `xmetric.RegisterAs` |
+
 ### 模块之间怎么互相扩展
 
 下层不认识上层。需要上层能力时，下层持有一个函数类型的扩展点，上层注入：
@@ -162,7 +177,8 @@ xtow/
 ├── internal/config/     配置加载
 ├── xerror/  xutil/      零第三方依赖
 ├── xapp/                应用身份（名字、版本），只认领配置不初始化
-├── xconfig/             集合元素配置解码的两个辅助函数
+├── xconfig/             配置解码辅助：严格解码、单/多实例分派
+├── xclient/             「一组按名字组织的实例」——xgorm/xredis/xcache 共用
 ├── xlog/                日志，基于 log/slog，零第三方依赖
 ├── xtrace/              链路，基于 OpenTelemetry（独立 module）
 ├── xmetric/             指标，基于 Prometheus（独立 module）

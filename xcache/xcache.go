@@ -4,15 +4,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
-	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/dgraph-io/ristretto/v2"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xclient"
 )
 
 // Cache 就是原生的 ristretto 缓存，这里只是给它起个短名字。
@@ -44,44 +41,29 @@ func (f closerFunc) Close() error { f(); return nil }
 
 // ---- 全局实例 ----
 
+// instance 一个缓存实例连同它自己的默认 TTL
 type instance struct {
 	cache *Cache
 	ttl   time.Duration
 }
 
-var (
-	mu        sync.RWMutex
-	instances = map[string]instance{}
-)
+// reg 具名实例注册表，与 xgorm / xredis 共用同一份实现，语义因此一致
+var reg = xclient.NewRegistry[instance]("xcache", ConfigKey)
 
 // C 取一个缓存实例，不带参数时取名为 default 的那个。
 //
-// 取不到直接 panic，理由同 xgorm / xredis：返回 nil 只是把同一个 panic
-// 推迟到调用方第一次用它的时候，那里的栈里看不出根因是配置没配。
-func C(name ...string) *Cache {
-	inst, ok := get(nameOf(name))
-	if !ok {
-		panic(missingMsg(nameOf(name)))
-	}
-	return inst.cache
-}
+// 取不到直接 panic，理由见 xclient.Registry.Get。
+func C(name ...string) *Cache { return reg.Get(name...).cache }
 
 // Has 报告指定实例是否已配置，供可选依赖判断
-func Has(name ...string) bool {
-	_, ok := get(nameOf(name))
-	return ok
-}
+func Has(name ...string) bool { return reg.Has(name...) }
 
 // Names 返回已配置的实例名
-func Names() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return slices.Sorted(maps.Keys(instances))
-}
+func Names() []string { return reg.Names() }
 
 // DefaultTTL 返回指定实例配置的默认过期时间
 func DefaultTTL(name ...string) time.Duration {
-	inst, _ := get(nameOf(name))
+	inst, _ := reg.Lookup(name...)
 	return inst.ttl
 }
 
@@ -105,10 +87,7 @@ func Get(key string) (any, bool) { return C().Get(key) }
 // 所以它适合用来观察「缓存是不是在丢写入」，不适合判断某个键此刻在不在缓存里
 // ——那只有 Get 能回答。缓存本来就允许丢，正常业务路径忽略返回值即可。
 func Set(key string, value any) bool {
-	inst, ok := get(DefaultName)
-	if !ok {
-		panic(missingMsg(DefaultName))
-	}
+	inst := reg.Get()
 	return inst.cache.SetWithTTL(key, value, 1, inst.ttl)
 }
 
@@ -119,28 +98,6 @@ func SetWithTTL(key string, value any, ttl time.Duration) bool {
 
 // Del 从默认实例删一个键
 func Del(key string) { C().Del(key) }
-
-func nameOf(name []string) string {
-	if len(name) > 0 {
-		return name[0]
-	}
-	return DefaultName
-}
-
-func get(name string) (instance, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	inst, ok := instances[name]
-	return inst, ok
-}
-
-func missingMsg(want string) string {
-	got := Names()
-	if len(got) == 0 {
-		return fmt.Sprintf("xcache: 没有名为 %q 的实例，而且一个实例都没配——检查配置里的 %s 块", want, ConfigKey)
-	}
-	return fmt.Sprintf("xcache: 没有名为 %q 的实例，已配置的有 [%s]", want, strings.Join(got, " "))
-}
 
 // ---- 登记 ----
 
@@ -157,42 +114,16 @@ func init() {
 }
 
 func initAll() (io.Closer, error) {
-	built := map[string]instance{}
-	var closers []io.Closer
-
-	for _, name := range slices.Sorted(maps.Keys(cfg.Clients)) {
-		c := cfg.Clients[name]
-		cache, closer, err := New(c)
-		if err != nil {
-			closeAll(closers)
-			return nil, fmt.Errorf("实例 %q: %w", name, err)
-		}
-		built[name] = instance{cache: cache, ttl: c.DefaultTTL}
-		closers = append(closers, closer)
+	closer, err := xclient.Build(reg, cfg.Clients,
+		func(c ClientConfig) (instance, io.Closer, error) {
+			cache, closer, err := New(c)
+			return instance{cache: cache, ttl: c.DefaultTTL}, closer, err
+		})
+	if err != nil {
+		return nil, err
 	}
-
-	mu.Lock()
-	instances = built
-	mu.Unlock()
-
-	if len(built) > 0 {
-		slog.Info("xcache 就绪", "实例", slices.Sorted(maps.Keys(built)))
+	if names := reg.Names(); len(names) > 0 {
+		slog.Info("xcache 就绪", "实例", names)
 	}
-	return &groupCloser{closers: closers}, nil
-}
-
-type groupCloser struct{ closers []io.Closer }
-
-func (g *groupCloser) Close() error {
-	mu.Lock()
-	instances = map[string]instance{}
-	mu.Unlock()
-	return closeAll(g.closers)
-}
-
-func closeAll(closers []io.Closer) error {
-	for i := len(closers) - 1; i >= 0; i-- {
-		closers[i].Close() // ristretto 的 Close 不返回错误
-	}
-	return nil
+	return closer, nil
 }

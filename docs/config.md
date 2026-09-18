@@ -239,3 +239,71 @@ XFlow:
 
 回滚不沿用调用方的 context，否则请求一超时补偿必然全部失败——而补偿最需要
 执行的时机恰恰就是那时候。它由 `RollbackTimeout` 单独限时。
+
+---
+
+## 写一个自己的集成
+
+第三方集成只需要认识 `registry`，外加两个可选的辅助包。
+
+最小形态（单实例、无外部资源）：
+
+```go
+const ConfigKey = "XMine"
+
+type Config struct {
+    Addr string `yaml:"Addr"`
+}
+
+func DefaultConfig() Config { return Config{Addr: "127.0.0.1:1234"} }
+
+var cfg = DefaultConfig()
+
+func New(c Config) (*Client, io.Closer, error) { /* 纯构造，不碰全局 */ }
+
+func init() {
+    registry.Register(registry.Component{
+        Key:    ConfigKey,
+        Stage:  registry.StageClient,
+        Config: &cfg,
+        Init:   func() (io.Closer, error) { /* 建实例、发布到全局 */ },
+    })
+}
+```
+
+要支持「单实例 / 多实例两种写法」就再加两样：
+
+```go
+// 配置分派
+func (c *Config) UnmarshalYAML(n *yaml.Node) error {
+    clients, err := xconfig.DecodeClients(n, DefaultClientConfig)
+    if err != nil {
+        return err
+    }
+    c.Clients = clients
+    return nil
+}
+
+// 集合元素自己铺默认值：map 的 value 从零值开始解，框架替不了它。
+// 这里必须用 xconfig.DecodeStrict 而不是 n.Decode——后者会丢掉严格检查，
+// 于是「字段拼错就启动失败」在集合里悄悄失效
+func (c *ClientConfig) UnmarshalYAML(n *yaml.Node) error {
+    *c = DefaultClientConfig()
+    type raw ClientConfig // 换个类型，否则这里递归调用自己
+    return xconfig.DecodeStrict(n, (*raw)(c))
+}
+
+// 具名实例注册表
+var reg = xclient.NewRegistry[*Client]("xmine", ConfigKey)
+
+func C(name ...string) *Client { return reg.Get(name...) }
+func Has(name ...string) bool  { return reg.Has(name...) }
+func Names() []string          { return reg.Names() }
+
+func initAll() (io.Closer, error) { return xclient.Build(reg, cfg.Clients, New) }
+```
+
+两条硬性要求（`check.sh` 会查）：
+
+- 必须导出纯构造器 `New`——零装配是默认路径，不能是唯一路径
+- 不许 import 根包，只能 import `registry`：依赖是单向的

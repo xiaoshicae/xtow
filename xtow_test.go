@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,4 +237,112 @@ func chdir(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chdir(old) })
+}
+
+func TestRun_等服务真正退出再关组件(t *testing.T) {
+	// 回归用例。Stop 返回不等于服务已经停干净——Stop 只负责「让它停」，
+	// 等不等在处理的请求做完是各实现自己的事。不等就往下关的话，
+	// 还在跑的请求会摸到已经关掉的数据库和缓存。
+	var closedAt, startReturnedAt time.Time
+	var mu sync.Mutex
+
+	comp := registry.Component{
+		Key: "Probe", Stage: registry.StageClient,
+		Init: func() (io.Closer, error) {
+			return closerFunc(func() error {
+				mu.Lock()
+				defer mu.Unlock()
+				closedAt = time.Now()
+				return nil
+			}), nil
+		},
+	}
+
+	// Stop 只发个信号就返回，Start 还要再跑一会儿才退出
+	stop := make(chan struct{})
+	r := &lateRunnable{
+		start: func(context.Context) error {
+			<-stop
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			startReturnedAt = time.Now()
+			return nil
+		},
+		stop: func(context.Context) error { close(stop); return nil },
+	}
+
+	go func() { time.Sleep(50 * time.Millisecond); syscallSelfInterrupt(t) }()
+	if err := Run(r, withComponents(comp), WithLogger(quietLogger())); err != nil {
+		t.Fatalf("Run 失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if startReturnedAt.IsZero() || closedAt.IsZero() {
+		t.Fatal("两边都该跑到")
+	}
+	if closedAt.Before(startReturnedAt) {
+		t.Errorf("组件在服务退出之前就被关了：关闭=%v 服务退出=%v", closedAt, startReturnedAt)
+	}
+}
+
+func TestRun_服务退出时的错误不会被丢掉(t *testing.T) {
+	// 走信号分支时 Start 的返回值此前从没被读过
+	wantErr := errors.New("监听挂了")
+	stop := make(chan struct{})
+	r := &lateRunnable{
+		start: func(context.Context) error { <-stop; return wantErr },
+		stop:  func(context.Context) error { close(stop); return nil },
+	}
+
+	go func() { time.Sleep(50 * time.Millisecond); syscallSelfInterrupt(t) }()
+	err := Run(r, withComponents(), WithLogger(quietLogger()))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("服务退出时的错误应当被带出来，got=%v", err)
+	}
+}
+
+type lateRunnable struct {
+	start func(context.Context) error
+	stop  func(context.Context) error
+}
+
+func (l *lateRunnable) Start(ctx context.Context) error { return l.start(ctx) }
+func (l *lateRunnable) Stop(ctx context.Context) error  { return l.stop(ctx) }
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// syscallSelfInterrupt 给自己发一个 SIGINT，模拟收到退出信号
+func syscallSelfInterrupt(t *testing.T) {
+	t.Helper()
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if err := p.Signal(syscall.SIGINT); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRun_服务自己退出时立刻返回(t *testing.T) {
+	// 回归用例。服务自己退出时，上面那次 select 已经把 runErr 取走了，
+	// 再取一次就是白等满整个停止预算——一个只会表现为「慢」的 bug。
+	r := &lateRunnable{
+		start: func(context.Context) error { return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+
+	start := time.Now()
+	if err := Run(r, withComponents(), WithLogger(quietLogger()), WithStopTimeout(5*time.Second)); err != nil {
+		t.Fatalf("Run 失败：%v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("服务自己退出时应当立刻返回，实际用了 %v", elapsed)
+	}
 }

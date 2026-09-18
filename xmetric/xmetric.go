@@ -101,11 +101,16 @@ func active() *Metrics {
 		return m
 	}
 	fallbackOnce.Do(func() {
-		// 兜底实例不采集 Go / 进程指标：那些由真正的实例负责，
-		// 这里只是给早到的打点一个不会丢的落点
-		c := DefaultConfig()
-		c.GoMetrics, c.ProcessMetrics, c.LogErrorMetric = false, false, false
-		fallback, _, _ = New(c)
+		// 直接建，不走 New：New 会返回 error，而这里没有能把错误交出去的地方，
+		// 吞掉它就意味着 fallback 可能是 nil，之后每一次打点都空指针。
+		// 兜底实例不采集 Go / 进程指标——那些由真正的实例负责，
+		// 这里只是给早到的打点一个不会丢的落点，没有会失败的步骤。
+		reg := prometheus.NewRegistry()
+		fallback = &Metrics{
+			Registry: reg,
+			Handler:  promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true}),
+			cfg:      DefaultConfig(),
+		}
 	})
 	return fallback
 }
@@ -190,4 +195,26 @@ func init() {
 			return closer, nil
 		},
 	})
+}
+
+// RegisterAs 注册 c 并把实际生效的那个断言回 T。
+//
+// 比 Register 好用的地方：调用方几乎总是需要具体类型（*CounterVec 之类）
+// 才能打点，而 Register 返回的是接口，每个调用点都要重复一遍
+// 「注册 → 判错 → 类型断言 → 断言失败怎么办」。
+//
+//	total, err := xmetric.RegisterAs(prometheus.NewCounterVec(opts, labels))
+//
+// 出错时返回传进来的那个（可以照常打点，只是导不出去），
+// 调用方据此决定是让启动失败还是记一条日志继续。
+func RegisterAs[T prometheus.Collector](c T) (T, error) {
+	registered, err := Register(c)
+	if err != nil {
+		return c, err
+	}
+	typed, ok := registered.(T)
+	if !ok {
+		return c, fmt.Errorf("xmetric: 指标名已被注册成 %T，通过它记录的值不会被导出", registered)
+	}
+	return typed, nil
 }

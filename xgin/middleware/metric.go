@@ -3,6 +3,7 @@ package middleware
 import (
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,27 +14,23 @@ import (
 
 // Metric 记录请求数和耗时，按方法、路由、状态码分。
 //
-// 指标在这里建、这里注册，而不是放成包级变量只建一次：
-// 包级变量会把 collector 绑死在「第一次建中间件时装的那个 registry」上，
-// 之后再换 registry，记的值就永远导不出去了。
-// 重复注册由 xmetric.Register 处理——它返回已有的那个实例。
+// collector 在第一个请求到来时才建，不在装配时建：装配可能发生在 xmetric
+// 初始化之前（使用者调一下 Engine() 就会），那时抓到的是兜底 registry，
+// 于是指标记得好好的、却永远不会出现在 /metrics 里——没有任何迹象。
+// 第一个请求一定在服务起来之后，那时什么都就绪了。
+//
+// once 是每个中间件实例一个而不是包级的：包级的会把 collector 绑死在
+// 第一次建中间件时的那个 registry 上，换 registry 之后记的值同样导不出去。
 func Metric() gin.HandlerFunc {
-	total := registerCounter(prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   xmetric.Namespace(),
-		Name:        "http_requests_total",
-		Help:        "HTTP 请求总数",
-		ConstLabels: xmetric.ConstLabels(),
-	}, []string{"method", "route", "status"}))
-
-	latency := registerHistogram(prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   xmetric.Namespace(),
-		Name:        "http_request_duration_seconds",
-		Help:        "HTTP 请求耗时",
-		Buckets:     xmetric.HTTPDurationBuckets(),
-		ConstLabels: xmetric.ConstLabels(),
-	}, []string{"method", "route", "status"}))
+	var (
+		once    sync.Once
+		total   *prometheus.CounterVec
+		latency *prometheus.HistogramVec
+	)
 
 	return func(c *gin.Context) {
+		once.Do(func() { total, latency = newCollectors() })
+
 		start := time.Now()
 
 		// 用 defer 记：即使 panic 穿过本层（比如用户自定义的 RecoveryFunc 自己炸了），
@@ -56,26 +53,33 @@ func Metric() gin.HandlerFunc {
 	}
 }
 
-func registerCounter(c *prometheus.CounterVec) *prometheus.CounterVec {
-	registered, err := xmetric.Register(c)
-	if err != nil {
-		slog.Error("xgin 请求数指标注册失败，通过它记录的值不会被导出", "错误", err)
-		return c
-	}
-	if typed, ok := registered.(*prometheus.CounterVec); ok {
-		return typed
-	}
-	return c
+// newCollectors 建并注册两个指标。重复注册由 xmetric.Register 处理——
+// 它返回已有的那个实例。
+func newCollectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
+	total := register(prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace:   xmetric.Namespace(),
+		Name:        "http_requests_total",
+		Help:        "HTTP 请求总数",
+		ConstLabels: xmetric.ConstLabels(),
+	}, []string{"method", "route", "status"}), "请求数")
+
+	latency := register(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace:   xmetric.Namespace(),
+		Name:        "http_request_duration_seconds",
+		Help:        "HTTP 请求耗时",
+		Buckets:     xmetric.HTTPDurationBuckets(),
+		ConstLabels: xmetric.ConstLabels(),
+	}, []string{"method", "route", "status"}), "请求耗时")
+
+	return total, latency
 }
 
-func registerHistogram(h *prometheus.HistogramVec) *prometheus.HistogramVec {
-	registered, err := xmetric.Register(h)
+// register 注册一个指标，出错只记日志：指标导不出去是可观测性问题，
+// 不该让一个 HTTP 服务起不来
+func register[T prometheus.Collector](c T, what string) T {
+	registered, err := xmetric.RegisterAs(c)
 	if err != nil {
-		slog.Error("xgin 请求耗时指标注册失败，通过它记录的值不会被导出", "错误", err)
-		return h
+		slog.Error("xgin "+what+"指标注册失败，通过它记录的值不会被导出", "错误", err)
 	}
-	if typed, ok := registered.(*prometheus.HistogramVec); ok {
-		return typed
-	}
-	return h
+	return registered
 }

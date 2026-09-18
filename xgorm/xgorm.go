@@ -3,14 +3,9 @@ package xgorm
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
-	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -18,7 +13,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xclient"
 	"github.com/xiaoshicae/xtow/xmetric"
+	"github.com/xiaoshicae/xtow/xutil"
 )
 
 const (
@@ -103,33 +100,8 @@ func dialector(d Driver, dsn string) gorm.Dialector {
 }
 
 // ping 建连验证，失败按固定间隔重试
-//
-// 带 context 是为了让启动期收到的退出信号能立即生效：不可中断的重试
-// 会让进程必须等满 attempts×interval 才肯退出。
 func ping(pool *sql.DB, cfg ClientConfig) error {
-	timeout := pingTimeout(cfg)
-	budget := timeout*pingAttempts + pingInterval*(pingAttempts-1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
-
-	var last error
-	for i := 0; i < pingAttempts; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return last
-			case <-time.After(pingInterval):
-			}
-		}
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, timeout)
-		last = pool.PingContext(attemptCtx)
-		attemptCancel()
-		if last == nil {
-			return nil
-		}
-	}
-	return last
+	return xutil.Retry(pingAttempts, pingTimeout(cfg), pingInterval, pool.PingContext)
 }
 
 // pingTimeout 单次 Ping 的超时
@@ -175,26 +147,17 @@ func (c *poolCloser) Close() error {
 
 // ---- 全局实例 ----
 
-var (
-	mu      sync.RWMutex
-	clients = map[string]*gorm.DB{}
-)
+// reg 具名实例注册表。取实例、找不到时的报错、关闭时摘干净，
+// 这些语义在 xgorm / xredis / xcache 之间必须一致，所以共用一份实现。
+var reg = xclient.NewRegistry[*gorm.DB]("xgorm", ConfigKey)
 
 // C 取一个 GORM 实例，不带参数时取名为 default 的那个。
 //
-// 取不到直接 panic。返回 nil 不会让程序走得更远——*gorm.DB 上任何方法在 nil 上
-// 都是空指针解引用，只是把同一个 panic 推迟到调用方第一次用它的时候，
-// 而那里的栈里只剩 "invalid memory address"，看不出根因是配置没配。
-// 这是启动期的配置问题，不是运行期要处理的错误。
+// 取不到直接 panic，理由见 xclient.Registry.Get：返回 nil 只会把同一个 panic
+// 推迟到调用方第一次用它的时候，而那里看不出根因是配置没配。
 //
 // 可选依赖（配了就用、没配就跳过）用 Has 先判断。
-func C(name ...string) *gorm.DB {
-	db := get(nameOf(name))
-	if db == nil {
-		panic(missingMsg(nameOf(name)))
-	}
-	return db
-}
+func C(name ...string) *gorm.DB { return reg.Get(name...) }
 
 // CWithCtx 取实例并绑定 ctx，链路和超时才能传到下游。
 //
@@ -204,37 +167,10 @@ func CWithCtx(ctx context.Context, name ...string) *gorm.DB {
 }
 
 // Has 报告指定实例是否已配置，供可选依赖判断
-func Has(name ...string) bool { return get(nameOf(name)) != nil }
+func Has(name ...string) bool { return reg.Has(name...) }
 
 // Names 返回已配置的实例名
-func Names() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return slices.Sorted(maps.Keys(clients))
-}
-
-func nameOf(name []string) string {
-	if len(name) > 0 {
-		return name[0]
-	}
-	return DefaultName
-}
-
-func get(name string) *gorm.DB {
-	mu.RLock()
-	defer mu.RUnlock()
-	return clients[name]
-}
-
-// missingMsg 只报「没找到」帮助有限：名字写错和整块没配是两个不同的问题，
-// 把实际配了哪些列出来，两者一眼可分
-func missingMsg(want string) string {
-	got := Names()
-	if len(got) == 0 {
-		return fmt.Sprintf("xgorm: 没有名为 %q 的实例，而且一个实例都没配——检查配置里的 %s 块", want, ConfigKey)
-	}
-	return fmt.Sprintf("xgorm: 没有名为 %q 的实例，已配置的有 [%s]", want, strings.Join(got, " "))
-}
+func Names() []string { return reg.Names() }
 
 // ---- 登记 ----
 
@@ -251,38 +187,21 @@ func init() {
 }
 
 func initAll() (io.Closer, error) {
-	built := map[string]*gorm.DB{}
-	var closers []io.Closer
-
-	// 名字排序后再建，让失败顺序可复现，也让日志顺序稳定
-	for _, name := range slices.Sorted(maps.Keys(cfg.Clients)) {
-		c := cfg.Clients[name]
-		db, closer, err := New(c)
-		if err != nil {
-			// 已经建好的必须关掉：Init 返回错误时框架拿不到 closer，
-			// 不自己收拾就会漏掉那几个连接池
-			closeAll(closers)
-			return nil, fmt.Errorf("实例 %q: %w", name, err)
-		}
-		built[name] = db
-		closers = append(closers, closer)
+	closer, err := xclient.Build(reg, cfg.Clients, New)
+	if err != nil {
+		return nil, err
 	}
 
-	mu.Lock()
-	clients = built
-	mu.Unlock()
-
-	if len(built) > 0 {
-		slog.Info("xgorm 就绪", "实例", slices.Sorted(maps.Keys(built)))
+	if names := reg.Names(); len(names) > 0 {
+		slog.Info("xgorm 就绪", "实例", names)
 	}
-
 	if metricEnabled(cfg.Clients) {
-		if _, err := xmetric.Register(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
-			// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
+		// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
+		if _, err := xmetric.RegisterAs(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
 			slog.Error("xgorm 连接池指标注册失败", "错误", err)
 		}
 	}
-	return &groupCloser{closers: closers}, nil
+	return closer, nil
 }
 
 // metricEnabled 任一实例开了指标就注册——collector 是进程级的一个
@@ -297,11 +216,12 @@ func metricEnabled(m map[string]ClientConfig) bool {
 
 // poolStats 读各实例连接池的实时状态
 func poolStats() map[string]sql.DBStats {
-	mu.RLock()
-	defer mu.RUnlock()
-
-	out := make(map[string]sql.DBStats, len(clients))
-	for name, db := range clients {
+	out := map[string]sql.DBStats{}
+	for _, name := range reg.Names() {
+		db, ok := reg.Lookup(name)
+		if !ok {
+			continue
+		}
 		pool, err := db.DB()
 		if err != nil || pool == nil {
 			continue
@@ -309,23 +229,4 @@ func poolStats() map[string]sql.DBStats {
 		out[name] = pool.Stats()
 	}
 	return out
-}
-
-type groupCloser struct{ closers []io.Closer }
-
-func (g *groupCloser) Close() error {
-	mu.Lock()
-	clients = map[string]*gorm.DB{}
-	mu.Unlock()
-	return closeAll(g.closers)
-}
-
-func closeAll(closers []io.Closer) error {
-	var errs []error
-	for i := len(closers) - 1; i >= 0; i-- {
-		if err := closers[i].Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }

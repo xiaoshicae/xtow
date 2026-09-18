@@ -182,15 +182,14 @@ func TestPing_重试后仍失败(t *testing.T) {
 
 func withClients(t *testing.T, m map[string]*redis.Client) {
 	t.Helper()
-	mu.Lock()
-	old := clients
-	clients = m
-	mu.Unlock()
-	t.Cleanup(func() {
-		mu.Lock()
-		clients = old
-		mu.Unlock()
-	})
+	old := map[string]*redis.Client{}
+	for _, n := range reg.Names() {
+		if v, ok := reg.Lookup(n); ok {
+			old[n] = v
+		}
+	}
+	reg.Publish(m)
+	t.Cleanup(func() { reg.Publish(old) })
 }
 
 func TestC_取不到就panic(t *testing.T) {

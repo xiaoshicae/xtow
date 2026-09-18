@@ -2,21 +2,18 @@ package xredis
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
-	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xclient"
 	"github.com/xiaoshicae/xtow/xmetric"
+	"github.com/xiaoshicae/xtow/xutil"
 )
 
 const (
@@ -87,32 +84,10 @@ func New(cfg ClientConfig) (*redis.Client, io.Closer, error) {
 }
 
 // ping 建连验证，失败按固定间隔重试
-//
-// 带 context 是为了让启动期收到的退出信号能立即生效。
 func ping(client *redis.Client, cfg ClientConfig) error {
-	timeout := pingTimeout(cfg)
-	budget := timeout*pingAttempts + pingInterval*(pingAttempts-1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
-
-	var last error
-	for i := 0; i < pingAttempts; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return last
-			case <-time.After(pingInterval):
-			}
-		}
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, timeout)
-		last = client.Ping(attemptCtx).Err()
-		attemptCancel()
-		if last == nil {
-			return nil
-		}
-	}
-	return last
+	return xutil.Retry(pingAttempts, pingTimeout(cfg), pingInterval, func(ctx context.Context) error {
+		return client.Ping(ctx).Err()
+	})
 }
 
 // pingTimeout 单次 Ping 的超时：建连加一个往返
@@ -138,55 +113,22 @@ func (c *clientCloser) Close() error {
 
 // ---- 全局实例 ----
 
-var (
-	mu      sync.RWMutex
-	clients = map[string]*redis.Client{}
-)
+// reg 具名实例注册表，与 xgorm / xcache 共用同一份实现，语义因此一致
+var reg = xclient.NewRegistry[*redis.Client]("xredis", ConfigKey)
 
 // C 取一个 Redis 实例，不带参数时取名为 default 的那个。
 //
-// 取不到直接 panic，理由同 xgorm：返回 nil 只是把同一个 panic 推迟到
-// 调用方第一次用它的时候，那里的栈里看不出根因是配置没配。
+// 取不到直接 panic，理由见 xclient.Registry.Get。
+// 不提供 CWithCtx：go-redis 的每个方法本来就收 ctx，再包一层没有意义。
 //
 // 可选依赖（配了就用、没配就跳过）用 Has 先判断。
-func C(name ...string) *redis.Client {
-	c := get(nameOf(name))
-	if c == nil {
-		panic(missingMsg(nameOf(name)))
-	}
-	return c
-}
+func C(name ...string) *redis.Client { return reg.Get(name...) }
 
 // Has 报告指定实例是否已配置，供可选依赖判断
-func Has(name ...string) bool { return get(nameOf(name)) != nil }
+func Has(name ...string) bool { return reg.Has(name...) }
 
 // Names 返回已配置的实例名
-func Names() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return slices.Sorted(maps.Keys(clients))
-}
-
-func nameOf(name []string) string {
-	if len(name) > 0 {
-		return name[0]
-	}
-	return DefaultName
-}
-
-func get(name string) *redis.Client {
-	mu.RLock()
-	defer mu.RUnlock()
-	return clients[name]
-}
-
-func missingMsg(want string) string {
-	got := Names()
-	if len(got) == 0 {
-		return fmt.Sprintf("xredis: 没有名为 %q 的实例，而且一个实例都没配——检查配置里的 %s 块", want, ConfigKey)
-	}
-	return fmt.Sprintf("xredis: 没有名为 %q 的实例，已配置的有 [%s]", want, strings.Join(got, " "))
-}
+func Names() []string { return reg.Names() }
 
 // ---- 登记 ----
 
@@ -203,35 +145,21 @@ func init() {
 }
 
 func initAll() (io.Closer, error) {
-	built := map[string]*redis.Client{}
-	var closers []io.Closer
-
-	// 名字排序后再建，让失败顺序可复现
-	for _, name := range slices.Sorted(maps.Keys(cfg.Clients)) {
-		client, closer, err := New(cfg.Clients[name])
-		if err != nil {
-			// Init 返回错误时框架拿不到 closer，已经建好的必须自己收拾
-			closeAll(closers)
-			return nil, fmt.Errorf("实例 %q: %w", name, err)
-		}
-		built[name] = client
-		closers = append(closers, closer)
+	closer, err := xclient.Build(reg, cfg.Clients, New)
+	if err != nil {
+		return nil, err
 	}
 
-	mu.Lock()
-	clients = built
-	mu.Unlock()
-
-	if len(built) > 0 {
-		slog.Info("xredis 就绪", "实例", slices.Sorted(maps.Keys(built)))
+	if names := reg.Names(); len(names) > 0 {
+		slog.Info("xredis 就绪", "实例", names)
 	}
 	if metricEnabled(cfg.Clients) {
-		if _, err := xmetric.Register(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
-			// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
+		// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
+		if _, err := xmetric.RegisterAs(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
 			slog.Error("xredis 连接池指标注册失败", "错误", err)
 		}
 	}
-	return &groupCloser{closers: closers}, nil
+	return closer, nil
 }
 
 // metricEnabled 任一实例开了指标就注册——collector 是进程级的一个
@@ -246,31 +174,11 @@ func metricEnabled(m map[string]ClientConfig) bool {
 
 // poolStats 读各实例连接池的实时状态
 func poolStats() map[string]*redis.PoolStats {
-	mu.RLock()
-	defer mu.RUnlock()
-
-	out := make(map[string]*redis.PoolStats, len(clients))
-	for name, c := range clients {
-		out[name] = c.PoolStats()
-	}
-	return out
-}
-
-type groupCloser struct{ closers []io.Closer }
-
-func (g *groupCloser) Close() error {
-	mu.Lock()
-	clients = map[string]*redis.Client{}
-	mu.Unlock()
-	return closeAll(g.closers)
-}
-
-func closeAll(closers []io.Closer) error {
-	var errs []error
-	for i := len(closers) - 1; i >= 0; i-- {
-		if err := closers[i].Close(); err != nil {
-			errs = append(errs, err)
+	out := map[string]*redis.PoolStats{}
+	for _, name := range reg.Names() {
+		if c, ok := reg.Lookup(name); ok {
+			out[name] = c.PoolStats()
 		}
 	}
-	return errors.Join(errs...)
+	return out
 }

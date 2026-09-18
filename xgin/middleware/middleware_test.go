@@ -350,3 +350,39 @@ func TestIsText(t *testing.T) {
 		}
 	}
 }
+
+func TestLog_读body出错也不能吃掉请求(t *testing.T) {
+	// 回归用例。退路里读一半出错就 return 的话，那半截请求体已经消失了，
+	// 下游 handler 拿到的是个空 body——记日志不该有能力改变请求本身。
+	capture(t)
+
+	const head = "前半截还读得到"
+	req := httptest.NewRequest("POST", "/hello", &failingReader{data: head})
+	req.Header.Set("Content-Type", "text/plain")
+	req.GetBody = nil // 逼它走「读出来再塞回去」的退路
+
+	var seen string
+	serve(t, req, []gin.HandlerFunc{Log(WithBody(true, false))}, func(c *gin.Context) {
+		b, _ := io.ReadAll(c.Request.Body)
+		seen = string(b)
+		c.Status(200)
+	})
+
+	if seen != head {
+		t.Errorf("读到多少就该还给下游多少，got=%q want=%q", seen, head)
+	}
+}
+
+// failingReader 先吐一段数据，然后报错
+type failingReader struct {
+	data string
+	done bool
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("连接断了")
+	}
+	r.done = true
+	return copy(p, r.data), nil
+}

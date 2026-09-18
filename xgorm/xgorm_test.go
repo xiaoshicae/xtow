@@ -150,15 +150,14 @@ func TestPing_重试后仍失败(t *testing.T) {
 
 func withClients(t *testing.T, m map[string]*gorm.DB) {
 	t.Helper()
-	mu.Lock()
-	old := clients
-	clients = m
-	mu.Unlock()
-	t.Cleanup(func() {
-		mu.Lock()
-		clients = old
-		mu.Unlock()
-	})
+	old := map[string]*gorm.DB{}
+	for _, n := range reg.Names() {
+		if v, ok := reg.Lookup(n); ok {
+			old[n] = v
+		}
+	}
+	reg.Publish(m)
+	t.Cleanup(func() { reg.Publish(old) })
 }
 
 func TestC_取不到就panic(t *testing.T) {
@@ -203,15 +202,6 @@ func TestHasNames(t *testing.T) {
 	}
 	if Has() {
 		t.Error("没有 default 时 Has() 应为 false")
-	}
-}
-
-func TestNameOf(t *testing.T) {
-	if nameOf(nil) != DefaultName {
-		t.Error("不带参数应取默认名")
-	}
-	if nameOf([]string{"x"}) != "x" {
-		t.Error("带参数应取参数")
 	}
 }
 

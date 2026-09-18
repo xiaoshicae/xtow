@@ -18,6 +18,7 @@ package xconfig
 
 import (
 	"bytes"
+	"fmt"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -48,3 +49,49 @@ func HasKey(node *yaml.Node, key string) bool {
 	}
 	return false
 }
+
+// DecodeClients 解一个「既支持单实例也支持多实例」的配置块。
+//
+//	XGorm:                  # 单实例，直接写字段，名字就是 default
+//	  DSN: "${DB_DSN}"
+//
+//	XGorm:                  # 多实例，按名字写
+//	  Clients:
+//	    default: {DSN: "${DB_DSN}"}
+//	    report:  {DSN: "${REPORT_DSN}"}
+//
+// 看有没有 Clients 决定按哪种解。两种混着写直接报错：那时候
+// 「default 到底是哪个」没有一个不让人意外的答案。
+//
+// defaults 提供单个实例的默认值。多实例那一支靠元素类型自己的
+// UnmarshalYAML 铺默认值（见本包开头的说明）。
+func DecodeClients[C any](n *yaml.Node, defaults func() C) (map[string]C, error) {
+	if !HasKey(n, clientsKey) {
+		single := defaults()
+		if err := DecodeStrict(n, &single); err != nil {
+			return nil, err
+		}
+		return map[string]C{DefaultClientName: single}, nil
+	}
+
+	var multi struct {
+		Clients map[string]C `yaml:"Clients"`
+	}
+	if err := DecodeStrict(n, &multi); err != nil {
+		return nil, fmt.Errorf("%w（单实例和多实例两种写法不能混用：写了 %s 就把所有字段都放进去）",
+			err, clientsKey)
+	}
+	if len(multi.Clients) == 0 {
+		return nil, fmt.Errorf("%s 是空的：要么写上实例，要么整块删掉", clientsKey)
+	}
+	return multi.Clients, nil
+}
+
+const (
+	clientsKey = "Clients"
+
+	// DefaultClientName 单实例写法被规整成的名字。
+	// 与 xclient.DefaultName 一致；这里再写一遍是为了不让核心的配置包
+	// 反过来依赖 xclient。
+	DefaultClientName = "default"
+)

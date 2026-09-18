@@ -12,14 +12,15 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/xiaoshicae/xtow/xclient"
 	"github.com/xiaoshicae/xtow/xconfig"
 )
 
 // ConfigKey 本模块在配置文件里的顶层 key
 const ConfigKey = "XGorm"
 
-// DefaultName C() 不带参数时取的那个 client 的名字
-const DefaultName = "default"
+// DefaultName C() 不带参数时取的那个实例的名字
+const DefaultName = xclient.DefaultName
 
 // Driver 数据库驱动
 type Driver string
@@ -145,30 +146,13 @@ func DefaultClientConfig() ClientConfig {
 // DefaultConfig 默认没有任何实例——没配 XGorm 就不该连任何数据库
 func DefaultConfig() Config { return Config{} }
 
-// UnmarshalYAML 支持单实例和多实例两种写法
-//
-// 看有没有 Clients 决定按哪种解。两种混着写直接报错：
-// 那时候「default 到底是哪个」没有一个不让人意外的答案。
+// UnmarshalYAML 支持单实例和多实例两种写法，解码规则见 xconfig.DecodeClients
 func (c *Config) UnmarshalYAML(n *yaml.Node) error {
-	if !xconfig.HasKey(n, "Clients") {
-		single := DefaultClientConfig()
-		if err := xconfig.DecodeStrict(n, &single); err != nil {
-			return err
-		}
-		c.Clients = map[string]ClientConfig{DefaultName: single}
-		return nil
+	clients, err := xconfig.DecodeClients(n, DefaultClientConfig)
+	if err != nil {
+		return err
 	}
-
-	var multi struct {
-		Clients map[string]ClientConfig `yaml:"Clients"`
-	}
-	if err := xconfig.DecodeStrict(n, &multi); err != nil {
-		return fmt.Errorf("%w（单实例和多实例两种写法不能混用：写了 Clients 就把所有字段都放进去）", err)
-	}
-	if len(multi.Clients) == 0 {
-		return fmt.Errorf("Clients 是空的：要么写上实例，要么整块删掉")
-	}
-	c.Clients = multi.Clients
+	c.Clients = clients
 	return nil
 }
 

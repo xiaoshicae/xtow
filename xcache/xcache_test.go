@@ -45,15 +45,14 @@ func withInstances(t *testing.T, cfgs map[string]ClientConfig) {
 		t.Cleanup(func() { closer.Close() })
 		built[name] = instance{cache: cache, ttl: c.DefaultTTL}
 	}
-	mu.Lock()
-	old := instances
-	instances = built
-	mu.Unlock()
-	t.Cleanup(func() {
-		mu.Lock()
-		instances = old
-		mu.Unlock()
-	})
+	old := map[string]instance{}
+	for _, n := range reg.Names() {
+		if v, ok := reg.Lookup(n); ok {
+			old[n] = v
+		}
+	}
+	reg.Publish(built)
+	t.Cleanup(func() { reg.Publish(old) })
 }
 
 func TestConfig_单实例写法(t *testing.T) {

@@ -81,7 +81,6 @@ func (g *XGin) Engine() *gin.Engine {
 // 中间件注册两遍，表现是每个请求打两条日志、指标翻倍。
 func (g *XGin) build() {
 	g.buildOnce.Do(func() {
-		gin.SetMode(cfg.Mode)
 		e := gin.New()
 		e.HandleMethodNotAllowed = true // 不开的话，方法不对会返回 404 而不是 405
 
@@ -110,7 +109,11 @@ func (g *XGin) build() {
 		}
 		if g.settings.metric {
 			e.Use(middleware.Metric())
-			e.GET(g.settings.metricPath, gin.WrapH(xmetric.Handler()))
+			// 每次请求再取 handler，不在这里定死：装配可能发生在 xmetric
+			// 初始化之前，那时拿到的是兜底 registry，/metrics 会一直是空的
+			e.GET(g.settings.metricPath, func(c *gin.Context) {
+				xmetric.Handler().ServeHTTP(c.Writer, c.Request)
+			})
 		}
 		e.Use(middleware.Recover(g.recover))
 
@@ -134,6 +137,9 @@ func (g *XGin) Start(ctx context.Context) error {
 	if err := cfg.validate(); err != nil {
 		return fmt.Errorf("xgin: 配置有误: %w", err)
 	}
+	// 在这里设而不是在装配里：装配可能发生在配置加载之前，
+	// 那时读到的是默认值，配置里写的 Mode 从此再也不生效
+	gin.SetMode(cfg.Mode)
 	g.build()
 
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))

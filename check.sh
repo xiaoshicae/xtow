@@ -45,11 +45,13 @@ echo "✓ init() 只出现在集成包里"
 a=$(go doc -all . | grep -cE '^(func|type) ')
 [ "$a" -le 15 ] || fail "根包公开 API $a 个，超过上限 15"
 
-# xconfig 是核心里唯一给集成包用的辅助包，它越小越好：
+# xconfig / xclient 是核心里给集成包用的两个辅助包，它们越小越好：
 # 每加一个导出就是一条所有第三方集成都得跟着理解的规矩
 x=$(go doc -all ./xconfig | grep -cE '^(func|type) ')
 [ "$x" -le 4 ] || fail "xconfig 公开 API $x 个，超过上限 4"
-echo "✓ 公开 API：根包 $a（上限 15）、xconfig $x（上限 4）"
+cl=$(go doc -all ./xclient | grep -cE '^(func|type) ')
+[ "$cl" -le 8 ] || fail "xclient 公开 API $cl 个，超过上限 8"
+echo "✓ 公开 API：根包 $a（上限 15）、xconfig $x（上限 4）、xclient $cl（上限 8）"
 
 # ---- 6. 集成包必须导出纯构造器 New，且不得引用根包 ----
 # New 保证「零装配」永远只是默认路径，不是唯一路径：

@@ -57,16 +57,35 @@ func Run(r Runnable, opts ...Option) error {
 	go func() { runErr <- safe("server", func() error { return r.Start(ctx) }) }()
 
 	var first error
+	var serverExited bool
 	select {
 	case <-ctx.Done():
 		o.log().Info("收到退出信号")
 	case e := <-runErr:
-		first = e
+		first, serverExited = e, true
 	}
 
 	stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), o.stopTimeout)
 	defer stopCancel()
 	first = errors.Join(first, safe("server", func() error { return r.Stop(stopCtx) }))
+
+	// 等 Start 真正返回再关其余组件。
+	//
+	// Stop 返回不等于服务已经停干净：Stop 只负责「让它停」，
+	// 有没有等在处理的请求做完是各实现自己的事。不等就往下关的话，
+	// 还在跑的请求会摸到已经关掉的数据库和缓存。
+	// 同时这也是唯一能拿到 Start 错误的地方——走信号分支时它还没被读过。
+	//
+	// 服务自己退出时上面那次 select 已经把 runErr 取走了，这里不能再取：
+	// channel 里没有第二个值，等下去就是白等满整个停止预算。
+	if !serverExited {
+		select {
+		case e := <-runErr:
+			first = errors.Join(first, e)
+		case <-stopCtx.Done():
+			o.log().Warn("服务没有在停止预算内退出，继续关闭其余组件", "预算", o.stopTimeout)
+		}
+	}
 
 	return errors.Join(first, shutdown(closers, o))
 }

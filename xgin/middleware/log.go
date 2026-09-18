@@ -205,15 +205,22 @@ func snapshotBody(req *http.Request) []byte {
 		}
 	}
 
-	// 退路：整个读出来，再塞一个等价的 Body 回去
-	b, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBody))
-	if err != nil {
-		return nil
-	}
-	rest, _ := io.ReadAll(req.Body) // 超出上限的部分照样要还给下游
+	// 退路：整个读出来，再塞一个等价的 Body 回去。
+	//
+	// 无论读成功与否都要把读到的还回去：读一半出错就 return 的话，
+	// 那半截请求体已经消失了，下游 handler 拿到的是个空 body——
+	// 记日志这件事不该有能力改变请求本身。
+	head, headErr := io.ReadAll(io.LimitReader(req.Body, maxRequestBody))
+	rest, restErr := io.ReadAll(req.Body) // 超出上限的部分照样要还给下游
 	req.Body.Close()
-	full := append(b, rest...)
+
+	full := make([]byte, 0, len(head)+len(rest))
+	full = append(append(full, head...), rest...)
 	req.Body = io.NopCloser(bytes.NewReader(full))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(full)), nil }
-	return b
+
+	if headErr != nil || restErr != nil {
+		return nil // 读不全就不记，但下游拿到的是我们读到的全部
+	}
+	return head
 }
