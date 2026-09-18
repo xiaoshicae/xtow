@@ -14,11 +14,11 @@ type Error struct {
 	Err    error  // 原始错误
 }
 
-// Error 渲染为 "xtwo {module} {op} failed, err=[...]"
+// Error 渲染为 "xtow {module} {op} failed, err=[...]"
 func (e *Error) Error() string {
 	var b strings.Builder
 	b.Grow(32 + len(e.Module) + len(e.Op))
-	b.WriteString("xtwo ")
+	b.WriteString("xtow ")
 	b.WriteString(e.Module)
 	b.WriteByte(' ')
 	b.WriteString(e.Op)

@@ -11,7 +11,8 @@ var errBase = errors.New("底层错误")
 func TestErrorMessage(t *testing.T) {
 	e := New("xgorm", "init", errBase)
 	got := e.Error()
-	for _, want := range []string{"xtwo", "xgorm", "init", "底层错误"} {
+	// 前缀是框架名 xtow，曾经手抖写成了 xtwo —— 它出现在本包产出的每一条错误里
+	for _, want := range []string{"xtow ", "xgorm", "init", "底层错误"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("错误消息应包含 %q，got=%q", want, got)
 		}

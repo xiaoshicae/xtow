@@ -245,6 +245,44 @@ func TestLoad_占位符填非字符串字段(t *testing.T) {
 	})
 }
 
+func TestLoad_占位符在map和切片里也按新内容判定类型(t *testing.T) {
+	// 展开是在整棵节点树上做的，map 的 value、切片元素、嵌套结构体都要对。
+	// 尤其是 map[string]string：重新判定类型不该把 "123" 变成读不进 string 的东西
+	os.Unsetenv("XTOW_T_C1")
+	type demo struct {
+		Labels  map[string]string `yaml:"Labels"`
+		Names   []string          `yaml:"Names"`
+		Buckets []float64         `yaml:"Buckets"`
+		Nested  struct {
+			Max int `yaml:"Max"`
+		} `yaml:"Nested"`
+	}
+
+	body := "Demo:\n" +
+		"  Labels:\n    env: ${XTOW_T_C1:dev}\n    ver: ${XTOW_T_C1:123}\n    on: ${XTOW_T_C1:true}\n" +
+		"  Names:\n    - ${XTOW_T_C1:a}\n    - ${XTOW_T_C1:7}\n" +
+		"  Buckets:\n    - ${XTOW_T_C1:0.1}\n    - ${XTOW_T_C1:1}\n" +
+		"  Nested:\n    Max: ${XTOW_T_C1:9}\n"
+
+	c := demo{}
+	if err := Load(write(t, body), []registry.Component{{Key: "Demo", Config: &c}}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"env": "dev", "ver": "123", "on": "true"}
+	if !reflect.DeepEqual(c.Labels, want) {
+		t.Errorf("map 的 string value 应原样是文本，got=%v", c.Labels)
+	}
+	if !reflect.DeepEqual(c.Names, []string{"a", "7"}) {
+		t.Errorf("字符串切片，got=%v", c.Names)
+	}
+	if !reflect.DeepEqual(c.Buckets, []float64{0.1, 1}) {
+		t.Errorf("数值切片，got=%v", c.Buckets)
+	}
+	if c.Nested.Max != 9 {
+		t.Errorf("嵌套结构体，got=%d", c.Nested.Max)
+	}
+}
+
 func TestLoad_占位符的值含特殊字符不破坏结构(t *testing.T) {
 	// 在解析后的节点上展开，而不是对原始字节做文本替换 —— 否则这是条注入路径
 	t.Setenv("XTOW_T_INJECT", "a: b\nEvil: true")

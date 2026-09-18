@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -265,6 +266,10 @@ func TestServe(t *testing.T) {
 	dir := t.TempDir()
 	port := freePort(t)
 	cfg := filepath.Join(dir, "application.yml")
+	// 端口走 ${VAR} 而不是直接写死：这条路径要一直通到 xgin 的 int 字段上。
+	// 占位符展开之后如果不重新判定标量类型，这里会以
+	// "cannot unmarshal !!str into int" 启动失败 —— 那正是它曾经的样子
+	t.Setenv("XTOW_EXAMPLE_PORT", strconv.Itoa(port))
 	os.WriteFile(cfg, []byte(fmt.Sprintf(`
 App:
   Name: xone.demo.app
@@ -277,8 +282,8 @@ XMetric:
   ProcessMetrics: false
 XGin:
   Host: 127.0.0.1
-  Port: %d
-`, dir, port)), 0o644)
+  Port: ${XTOW_EXAMPLE_PORT}
+`, dir)), 0o644)
 
 	var body, metrics string
 	var traceID string
