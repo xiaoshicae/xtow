@@ -581,7 +581,7 @@ func TestClose_关掉独立实例不影响全局(t *testing.T) {
 	cfg = c
 	t.Cleanup(func() { cfg = old })
 
-	frameworkCloser, err := initTracing(context.Background())
+	frameworkCloser, err := initTracing(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

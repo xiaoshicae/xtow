@@ -247,7 +247,7 @@ func TestInitAll_建起来又关干净(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = Config{Clients: map[string]ClientConfig{"a": DefaultClientConfig(), "b": DefaultClientConfig()}}
 
-	closer, err := initAll(context.Background())
+	closer, err := initAll(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("应当建得起来：%v", err)
 	}
@@ -270,7 +270,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	bad.MaxCost = -1
 	cfg = Config{Clients: map[string]ClientConfig{"a": DefaultClientConfig(), "z": bad}}
 
-	if _, err := initAll(context.Background()); err == nil {
+	if _, err := initAll(context.Background(), cfg); err == nil {
 		t.Fatal("配置非法时应当报错")
 	} else if !strings.Contains(err.Error(), `"z"`) {
 		t.Errorf("错误里应点名是哪个实例，got=%v", err)
@@ -285,7 +285,7 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = DefaultConfig()
 
-	closer, err := initAll(context.Background())
+	closer, err := initAll(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("没配不该报错：%v", err)
 	}

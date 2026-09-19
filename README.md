@@ -139,6 +139,20 @@ func New(ctx context.Context, cfg Config) (*T, io.Closer, error)  // 会建连�
 
 这一条写进了 CI 检查。
 
+同样的道理往上再走一层：模块的初始化函数也收配置，而不是去读包级变量。
+
+```go
+func initAll(ctx context.Context, c Config) (io.Closer, error)   // 要什么写在签名里
+```
+
+`registry.Component.Init` 仍然只收 `ctx`——它是所有集成共用的契约，
+配置类型各不相同，给它加参数只能是 `any`，于是每个集成都要做一次
+「不可能失败」的类型断言。登记时用闭包把配置接上即可：
+
+```go
+Init: func(ctx context.Context) (io.Closer, error) { return initAll(ctx, cfg) },
+```
+
 ### 不是 Web 服务怎么办：consumer / job
 
 `xgin` 没有任何特殊地位，它只是众多 `Runnable` 实现中的一个。触发初始化的是

@@ -204,12 +204,12 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageClient,
 		Config: &cfg,
-		Init:   initAll,
+		Init:   func(ctx context.Context) (io.Closer, error) { return initAll(ctx, cfg) },
 	})
 }
 
-func initAll(ctx context.Context) (io.Closer, error) {
-	closer, err := xclient.Build(ctx, reg, cfg.Clients, New)
+func initAll(ctx context.Context, c Config) (io.Closer, error) {
+	closer, err := xclient.Build(ctx, reg, c.Clients, New)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func initAll(ctx context.Context) (io.Closer, error) {
 	if names := reg.Names(); len(names) > 0 {
 		slog.Info("xgorm ready", "instances", names)
 	}
-	if metricEnabled(cfg.Clients) {
+	if metricEnabled(c.Clients) {
 		// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
 		if _, err := xmetric.RegisterAs(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
 			slog.Error("xgorm failed to register pool metrics", "error", err)

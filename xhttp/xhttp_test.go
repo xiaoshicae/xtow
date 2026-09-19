@@ -339,7 +339,7 @@ func TestInit_没配也能用(t *testing.T) {
 		mu.Unlock()
 	})
 
-	closer, err := initClient(context.Background())
+	closer, err := initClient(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("没配不该报错：%v", err)
 	}

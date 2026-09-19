@@ -235,7 +235,7 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = DefaultConfig()
 
-	closer, err := initAll(context.Background())
+	closer, err := initAll(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("没配 XGorm 不该报错：%v", err)
 	}
@@ -258,7 +258,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	cfg = Config{Clients: map[string]ClientConfig{"a": bad, "b": bad}}
 
 	before := stabilize()
-	_, err := initAll(context.Background())
+	_, err := initAll(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("连不上时应当报错")
 	}

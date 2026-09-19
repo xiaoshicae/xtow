@@ -276,14 +276,14 @@ func detach(tp *sdktrace.TracerProvider) {
 // 已经被取走、再也不会被读的 pending 上，然后被静默丢掉——
 // Span 照常产生，只是永远到不了上报端，没有任何迹象。
 // 代价只是并发的注册方要等初始化走完，那本来就是它该等的。
-func initTracing(ctx context.Context) (io.Closer, error) {
+func initTracing(ctx context.Context, c Config) (io.Closer, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	procs := pending
 	pending = nil
 
-	t, closer, err := New(ctx, cfg, procs...)
+	t, closer, err := New(ctx, c, procs...)
 	if err != nil {
 		// 没装起来，把待办还回去：调用方多半会让启动失败，
 		// 但万一它选择继续，这些处理器不该凭空消失
@@ -304,6 +304,6 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageTelemetry,
 		Config: &cfg,
-		Init:   initTracing,
+		Init:   func(ctx context.Context) (io.Closer, error) { return initTracing(ctx, cfg) },
 	})
 }

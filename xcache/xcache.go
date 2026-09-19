@@ -115,12 +115,12 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageClient,
 		Config: &cfg,
-		Init:   initAll,
+		Init:   func(ctx context.Context) (io.Closer, error) { return initAll(ctx, cfg) },
 	})
 }
 
-func initAll(ctx context.Context) (io.Closer, error) {
-	closer, err := xclient.Build(ctx, reg, cfg.Clients,
+func initAll(ctx context.Context, conf Config) (io.Closer, error) {
+	closer, err := xclient.Build(ctx, reg, conf.Clients,
 		func(_ context.Context, c ClientConfig) (instance, io.Closer, error) {
 			cache, closer, err := New(c)
 			return instance{cache: cache, ttl: c.DefaultTTL}, closer, err

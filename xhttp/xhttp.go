@@ -198,12 +198,12 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageClient,
 		Config: &cfg,
-		Init:   initClient,
+		Init:   func(ctx context.Context) (io.Closer, error) { return initClient(ctx, cfg) },
 	})
 }
 
-func initClient(context.Context) (io.Closer, error) {
-	client, closer, err := New(cfg)
+func initClient(_ context.Context, c Config) (io.Closer, error) {
+	client, closer, err := New(c)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +212,7 @@ func initClient(context.Context) (io.Closer, error) {
 	current = client
 	mu.Unlock()
 
-	slog.Info("xhttp ready", "timeout", cfg.Timeout, "max_idle_conns_per_host", cfg.MaxIdleConnsPerHost, "retries", cfg.RetryCount)
+	slog.Info("xhttp ready", "timeout", c.Timeout, "max_idle_conns_per_host", c.MaxIdleConnsPerHost, "retries", c.RetryCount)
 	return &resetCloser{inner: closer}, nil
 }
 

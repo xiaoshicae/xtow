@@ -270,12 +270,12 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 }
 
 func TestInitAll_建起来又关干净(t *testing.T) {
+	// 配置直接传进去，不用换包级变量再记得换回来：
+	// initAll 的签名如实说明它需要一份配置
 	f := newFakeRedis(t)
-	old := cfg
-	t.Cleanup(func() { cfg = old })
-	cfg = Config{Clients: map[string]ClientConfig{"a": liveCfg(f), "b": liveCfg(f)}}
+	c := Config{Clients: map[string]ClientConfig{"a": liveCfg(f), "b": liveCfg(f)}}
 
-	closer, err := initAll(context.Background())
+	closer, err := initAll(context.Background(), c)
 	if err != nil {
 		t.Fatalf("应当建得起来：%v", err)
 	}
@@ -302,7 +302,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	bad.DialTimeout, bad.ReadTimeout, bad.MinIdleConns = 30*time.Millisecond, 30*time.Millisecond, 0
 	cfg = Config{Clients: map[string]ClientConfig{"a": liveCfg(f), "z": bad}}
 
-	_, err := initAll(context.Background())
+	_, err := initAll(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("有实例连不上时应当报错")
 	}
@@ -323,7 +323,7 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = DefaultConfig()
 
-	closer, err := initAll(context.Background())
+	closer, err := initAll(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("没配不该报错：%v", err)
 	}
