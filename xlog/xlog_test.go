@@ -441,7 +441,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	cfg.Console = false
 	cfg.File = FileConfig{Enable: true, Path: dir, Name: "app.log", RotateTime: time.Hour, MaxAge: time.Hour}
 
-	closer, err := got.Init()
+	closer, err := got.Init(context.Background())
 	if err != nil {
 		t.Fatalf("初始化失败：%v", err)
 	}

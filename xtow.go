@@ -21,6 +21,10 @@ import (
 )
 
 // Runnable 需要持续运行的东西，通常就是你的服务器。
+//
+// Start 收到的 ctx 在退出信号到达时被取消，Start 应当据此返回。
+// Stop 收到的是一个独立的、带停止预算的 ctx——它不继承那次取消，
+// 否则每个关闭动作一进去就被拒绝，等于没有优雅退出。
 type Runnable interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -42,6 +46,13 @@ func Run(r Runnable, opts ...Option) error {
 		return fmt.Errorf("xtow: 停止预算必须大于 0（0 不是不限时，是一点都不等），got=%v", o.stopTimeout)
 	}
 
+	// 退出信号在做任何事之前就接管，配置加载和初始化都在它的保护之内。
+	// 装在初始化之后的话，启动期间（连库、连 Redis、Ping 重试）收到 SIGTERM
+	// 走的是系统默认处置：进程当场暴毙，已经建好的资源一个都来不及注销——
+	// 注册中心里那条记录、那把分布式锁，只能等对端超时过期。
+	ctx, stopSignals := notifyShutdown(o)
+	defer stopSignals()
+
 	list := o.components
 	if list == nil {
 		list = registry.Snapshot()
@@ -54,13 +65,22 @@ func Run(r Runnable, opts ...Option) error {
 		return err
 	}
 
-	closers, err := initAll(list, o)
-	if err != nil {
+	closers, err := initAll(ctx, list, o)
+	switch {
+	case ctx.Err() != nil:
+		// 初始化期间收到退出信号：不启动服务，把已经建好的逆序关干净。
+		// 即便 initAll 带回了错误也不往上报——被取消的建连必然失败，
+		// 那是按要求退出的结果而不是故障。报上去的话，每次滚动更新
+		// 撞上这个窗口都会在面板上留一条「启动失败」。
+		attrs := []any{"已就绪组件数", len(closers)}
+		if err != nil {
+			attrs = append(attrs, "被中断的初始化", err)
+		}
+		o.log().Info("初始化期间收到退出信号，不启动服务", attrs...)
+		return shutdown(closers, o)
+	case err != nil:
 		return errors.Join(err, shutdown(closers, o))
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- safe("server", func() error { return r.Start(ctx) }) }()
@@ -68,8 +88,7 @@ func Run(r Runnable, opts ...Option) error {
 	var first error
 	var serverExited bool
 	select {
-	case <-ctx.Done():
-		o.log().Info("收到退出信号")
+	case <-ctx.Done(): // 信号已经由 notifyShutdown 记过日志了
 	case e := <-runErr:
 		first, serverExited = e, true
 	}
@@ -132,16 +151,23 @@ type named struct {
 	c   io.Closer
 }
 
-func initAll(list []registry.Component, o options) ([]named, error) {
+func initAll(ctx context.Context, list []registry.Component, o options) ([]named, error) {
 	var closers []named
 	for _, c := range list {
 		if c.Init == nil {
 			continue
 		}
-		// 每次重新取：xlog 就在这个循环里把全局默认 logger 换掉，
+		// 每个组件之前看一眼：已经决定退出了就别再去连三个库。
+		// 打断不了正在跑的那一个——那要靠它自己把 ctx 传下去，
+		// 所以 Init 的签名里有 ctx
+		if ctx.Err() != nil {
+			o.log().Warn("收到退出信号，跳过剩余组件的初始化", "已就绪", len(closers))
+			return closers, nil
+		}
+		// 每次重新取 logger：xlog 就在这个循环里把全局默认 logger 换掉，
 		// 它之后的组件应该用新的那个
 		o.log().Info("初始化", "组件", c.Key)
-		cl, err := safeInit(c)
+		cl, err := safeInit(ctx, c)
 		if err != nil {
 			return closers, fmt.Errorf("%s 初始化失败: %w", c.Key, err)
 		}
@@ -168,13 +194,13 @@ func shutdown(closers []named, o options) error {
 //
 // 一个组件初始化时炸了，不该把整个进程打穿——它应该变成一个普通的启动错误，
 // 让已经初始化的部分有机会被逆序关闭。
-func safeInit(c registry.Component) (cl io.Closer, err error) {
+func safeInit(ctx context.Context, c registry.Component) (cl io.Closer, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			cl, err = nil, fmt.Errorf("%s panic: %v", c.Key, r)
 		}
 	}()
-	return c.Init()
+	return c.Init(ctx)
 }
 
 func safe(name string, f func() error) (err error) {
@@ -184,6 +210,47 @@ func safe(name string, f func() error) (err error) {
 		}
 	}()
 	return f()
+}
+
+// shutdownSignals 触发优雅退出的信号
+var shutdownSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+
+// notifyShutdown 接管退出信号，返回一个收到信号时被取消的 context。
+//
+// 与 signal.NotifyContext 的差别在于第一个信号之后会把默认处置还回去，
+// 于是再发一次信号由系统直接终止进程。这一手是必须的：注册信号处理本身
+// 就取消了系统原本的「收到就死」，而框架在初始化和关闭阶段都可能卡在
+// 某个不看 ctx 的第三方调用里——没有这条逃生口，那些情况下进程会变成
+// 只有 kill -9 才能收掉，K8s 得等满整个终止宽限期。
+//
+// 返回的 stop 用于正常退出时注销，它会等接管协程真正退出再返回，
+// 保证 Run 返回之后信号已经回到默认处置（同一进程里反复 Run 的测试依赖这点）。
+func notifyShutdown(o options) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, shutdownSignals...)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case s := <-ch:
+			// 先还原默认处置再取消：这中间要是又来一个信号，
+			// 要的就是它直接把进程终止掉，而不是被一个已经没人看的 handler 收走
+			signal.Stop(ch)
+			o.log().Info("收到退出信号，开始优雅关闭；再发一次可立即终止",
+				"信号", s.String())
+			cancel()
+		case <-ctx.Done():
+			signal.Stop(ch)
+		}
+	}()
+
+	return ctx, func() {
+		cancel()
+		<-done
+	}
 }
 
 type options struct {

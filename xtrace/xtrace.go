@@ -53,7 +53,7 @@ func (t *Tracing) Install() {
 //
 // 返回的 io.Closer 永不为 nil，关闭时会把 Span 冲刷出去，
 // 等待上限由 cfg.ShutdownTimeout 控制。
-func New(cfg Config, procs ...sdktrace.SpanProcessor) (*Tracing, io.Closer, error) {
+func New(ctx context.Context, cfg Config, procs ...sdktrace.SpanProcessor) (*Tracing, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, nil, err
 	}
@@ -71,7 +71,7 @@ func New(cfg Config, procs ...sdktrace.SpanProcessor) (*Tracing, io.Closer, erro
 		return &Tracing{TracerProvider: noop.NewTracerProvider(), Propagator: prop}, noopCloser{}, nil
 	}
 
-	res, err := newResource()
+	res, err := newResource(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -115,8 +115,10 @@ func newPropagator(cfg Config) (propagation.TextMapPropagator, error) {
 	return propagation.NewCompositeTextMapPropagator(list...), nil
 }
 
-func newResource() (*resource.Resource, error) {
-	res, err := resource.New(context.Background(),
+// newResource 采集进程与主机属性。走调用方的 ctx：主机探测会读文件、
+// 查网卡，慢的时候不该让一个已经在退出的进程还在这儿等
+func newResource(ctx context.Context) (*resource.Resource, error) {
+	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithProcess(),
 		resource.WithTelemetrySDK(),
@@ -252,14 +254,14 @@ func detach() {
 // 已经被取走、再也不会被读的 pending 上，然后被静默丢掉——
 // Span 照常产生，只是永远到不了上报端，没有任何迹象。
 // 代价只是并发的注册方要等初始化走完，那本来就是它该等的。
-func initTracing() (io.Closer, error) {
+func initTracing(ctx context.Context) (io.Closer, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	procs := pending
 	pending = nil
 
-	t, closer, err := New(cfg, procs...)
+	t, closer, err := New(ctx, cfg, procs...)
 	if err != nil {
 		// 没装起来，把待办还回去：调用方多半会让启动失败，
 		// 但万一它选择继续，这些处理器不该凭空消失

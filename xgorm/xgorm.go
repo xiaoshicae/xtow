@@ -32,9 +32,12 @@ var pingInterval = time.Second
 
 // New 按配置建一个 GORM 实例，不触碰任何全局变量。
 //
+// ctx 限定建连验证的生命期：地址不通时这里要走满一轮 Ping 重试，
+// 收到退出信号就该当场放弃，而不是让进程卡在一个注定连不上的库上。
+//
 // 返回的 io.Closer 关闭底层连接池。建连失败时不会留下连接池——
 // gorm.Open 在自动 ping 失败时不关它自己建的池子，那会漏一个常驻协程。
-func New(cfg ClientConfig) (*gorm.DB, io.Closer, error) {
+func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, nil, fmt.Errorf("xgorm: 配置有误: %w", err)
 	}
@@ -76,7 +79,7 @@ func New(cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	pool.SetConnMaxLifetime(cfg.MaxLifetime)
 	pool.SetConnMaxIdleTime(cfg.MaxIdleTime)
 
-	if err := ping(pool, cfg); err != nil {
+	if err := ping(ctx, pool, cfg); err != nil {
 		return nil, nil, fmt.Errorf("xgorm: 连不上 %s: %w", info.Addr, err)
 	}
 
@@ -99,9 +102,9 @@ func dialector(d Driver, dsn string) gorm.Dialector {
 	return postgres.Open(dsn)
 }
 
-// ping 建连验证，失败按固定间隔重试
-func ping(pool *sql.DB, cfg ClientConfig) error {
-	return xutil.Retry(pingAttempts, pingTimeout(cfg), pingInterval, pool.PingContext)
+// ping 建连验证，失败按固定间隔重试；ctx 取消时立即放弃
+func ping(ctx context.Context, pool *sql.DB, cfg ClientConfig) error {
+	return xutil.Retry(ctx, pingAttempts, pingTimeout(cfg), pingInterval, pool.PingContext)
 }
 
 // pingTimeout 单次 Ping 的超时
@@ -186,8 +189,8 @@ func init() {
 	})
 }
 
-func initAll() (io.Closer, error) {
-	closer, err := xclient.Build(reg, cfg.Clients, New)
+func initAll(ctx context.Context) (io.Closer, error) {
+	closer, err := xclient.Build(ctx, reg, cfg.Clients, New)
 	if err != nil {
 		return nil, err
 	}

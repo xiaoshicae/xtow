@@ -60,7 +60,7 @@ func (r *recorder) isShut() bool {
 
 func TestNew_默认配置产出真provider(t *testing.T) {
 	rec := &recorder{}
-	tr, closer, err := New(DefaultConfig(), rec)
+	tr, closer, err := New(context.Background(), DefaultConfig(), rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestNew_关闭链路时是noop(t *testing.T) {
 	c := DefaultConfig()
 	c.Enable = false
 	rec := &recorder{}
-	tr, closer, err := New(c, rec)
+	tr, closer, err := New(context.Background(), c, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestNew_关闭链路仍保留Header透传(t *testing.T) {
 	c := DefaultConfig()
 	c.Enable = false
 	c.ForwardHeaders = []string{"X-Request-Id"}
-	tr, closer, err := New(c)
+	tr, closer, err := New(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestNew_关闭链路仍保留Header透传(t *testing.T) {
 }
 
 func TestNew_开启时装W3C与B3(t *testing.T) {
-	tr, closer, err := New(DefaultConfig())
+	tr, closer, err := New(context.Background(), DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestNew_矛盾的透传配置直接失败(t *testing.T) {
 	c.ForwardHeaders = []string{"X-Internal-Token"}
 	c.ForwardHeaderRules = []ForwardHeaderRule{{Domains: []string{"*.internal.com"}, Headers: []string{"X-Internal-Token"}}}
 
-	if _, _, err := New(c); err == nil {
+	if _, _, err := New(context.Background(), c); err == nil {
 		t.Fatal("矛盾的配置应当在启动时就失败，而不是猜一个语义跑下去")
 	}
 }
@@ -161,7 +161,7 @@ func TestNew_停止预算为零直接失败(t *testing.T) {
 	// 缓冲区里还没发出去的 Span 直接丢掉，而配置文件看上去只是没设上限
 	c := DefaultConfig()
 	c.ShutdownTimeout = 0
-	if _, _, err := New(c); err == nil {
+	if _, _, err := New(context.Background(), c); err == nil {
 		t.Fatal("ShutdownTimeout=0 应当报错")
 	}
 }
@@ -172,7 +172,7 @@ func TestNew_采样率为零仍然生成并透传TraceID(t *testing.T) {
 	// 要连 Span 都不产生请用 Enable: false
 	c := DefaultConfig()
 	c.SampleRatio = 0
-	tr, closer, err := New(c)
+	tr, closer, err := New(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSamplerOf(t *testing.T) {
 func TestNew_采样率生效(t *testing.T) {
 	c := DefaultConfig()
 	c.SampleRatio = 0.5
-	tr, closer, err := New(c)
+	tr, closer, err := New(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestClose_超时不挂死(t *testing.T) {
 	// 导出端不可达时 Shutdown 会一直阻塞，没有 deadline 就是退出时挂死
 	c := DefaultConfig()
 	c.ShutdownTimeout = 50 * time.Millisecond
-	_, closer, err := New(c, blockingProcessor{})
+	_, closer, err := New(context.Background(), c, blockingProcessor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestInstall_日志拿得到TraceID(t *testing.T) {
 	// xlog 不依赖 OpenTelemetry，日志里的 trace_id 全靠本包注入这个提取器
 	t.Cleanup(func() { xlog.SetTraceExtractor(nil) })
 
-	tr, closer, err := New(DefaultConfig())
+	tr, closer, err := New(context.Background(), DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func initComponent(t *testing.T) io.Closer {
 		if c.Key != ConfigKey {
 			continue
 		}
-		closer, err := c.Init()
+		closer, err := c.Init(context.Background())
 		if err != nil {
 			t.Fatalf("初始化失败：%v", err)
 		}

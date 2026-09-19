@@ -1,6 +1,7 @@
 package xclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -75,8 +76,8 @@ func TestBuild_全部成功(t *testing.T) {
 	r := NewRegistry[string]("xdemo", "XDemo")
 	var closed []string
 
-	closer, err := Build(r, map[string]string{"a": "A", "b": "B"},
-		func(c string) (string, io.Closer, error) {
+	closer, err := Build(context.Background(), r, map[string]string{"a": "A", "b": "B"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
 			return c, &recordCloser{name: c, closed: &closed}, nil
 		})
 	if err != nil {
@@ -104,8 +105,8 @@ func TestBuild_一个失败就全部回滚(t *testing.T) {
 	r := NewRegistry[string]("xdemo", "XDemo")
 	var closed []string
 
-	_, err := Build(r, map[string]string{"a": "A", "z": "Z"},
-		func(c string) (string, io.Closer, error) {
+	_, err := Build(context.Background(), r, map[string]string{"a": "A", "z": "Z"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
 			if c == "Z" {
 				return "", nil, errors.New("建不起来")
 			}
@@ -130,8 +131,8 @@ func TestBuild_关闭错误会带出来但不中断(t *testing.T) {
 	var closed []string
 	boom := errors.New("关不掉")
 
-	closer, err := Build(r, map[string]string{"a": "A", "b": "B"},
-		func(c string) (string, io.Closer, error) {
+	closer, err := Build(context.Background(), r, map[string]string{"a": "A", "b": "B"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
 			return c, &recordCloser{name: c, closed: &closed, err: boom}, nil
 		})
 	if err != nil {
@@ -147,7 +148,7 @@ func TestBuild_关闭错误会带出来但不中断(t *testing.T) {
 
 func TestBuild_空配置(t *testing.T) {
 	r := NewRegistry[string]("xdemo", "XDemo")
-	closer, err := Build(r, map[string]string{}, func(string) (string, io.Closer, error) {
+	closer, err := Build(context.Background(), r, map[string]string{}, func(context.Context, string) (string, io.Closer, error) {
 		t.Fatal("不该被调用")
 		return "", nil, nil
 	})
@@ -162,12 +163,40 @@ func TestBuild_空配置(t *testing.T) {
 func TestBuild_nil_Closer不炸(t *testing.T) {
 	// 有的实例可能没有要关的东西
 	r := NewRegistry[string]("xdemo", "XDemo")
-	closer, err := Build(r, map[string]string{"a": "A"},
-		func(c string) (string, io.Closer, error) { return c, nil, nil })
+	closer, err := Build(context.Background(), r, map[string]string{"a": "A"},
+		func(_ context.Context, c string) (string, io.Closer, error) { return c, nil, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := closer.Close(); err != nil {
 		t.Errorf("nil Closer 应被跳过，got=%v", err)
+	}
+}
+
+func TestBuild_收到退出信号就不再建剩下的实例(t *testing.T) {
+	// 配了五个库、第一个就要重试到超时的话，收到退出信号应当就此打住，
+	// 而不是把剩下四个也挨个试一遍——那几次注定失败的重试会拖满退出时间
+	r := NewRegistry[string]("xdemo", "XDemo")
+	ctx, cancel := context.WithCancel(context.Background())
+	var built, closed []string
+
+	_, err := Build(ctx, r, map[string]string{"a": "A", "b": "B", "c": "C"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
+			built = append(built, c)
+			cancel() // 建第一个的时候收到退出信号
+			return c, &recordCloser{name: c, closed: &closed}, nil
+		})
+
+	if err == nil {
+		t.Fatal("收到退出信号应当中止并报错")
+	}
+	if len(built) != 1 {
+		t.Errorf("取消之后不该再建，got=%v", built)
+	}
+	if len(closed) != 1 || closed[0] != "A" {
+		t.Errorf("已经建好的要关掉，否则漏一个连接池，got=%v", closed)
+	}
+	if r.Names() != nil && len(r.Names()) != 0 {
+		t.Errorf("中途失败不该把半成品发布出去，got=%v", r.Names())
 	}
 }

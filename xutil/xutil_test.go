@@ -62,7 +62,7 @@ func TestGetOrDefault(t *testing.T) {
 
 func TestRetry_首次成功不重试(t *testing.T) {
 	n := 0
-	err := Retry(3, time.Second, time.Millisecond, func(context.Context) error {
+	err := Retry(context.Background(), 3, time.Second, time.Millisecond, func(context.Context) error {
 		n++
 		return nil
 	})
@@ -73,7 +73,7 @@ func TestRetry_首次成功不重试(t *testing.T) {
 
 func TestRetry_失败后重试(t *testing.T) {
 	n := 0
-	err := Retry(3, time.Second, time.Millisecond, func(context.Context) error {
+	err := Retry(context.Background(), 3, time.Second, time.Millisecond, func(context.Context) error {
 		n++
 		if n < 3 {
 			return errors.New("还不行")
@@ -88,7 +88,7 @@ func TestRetry_失败后重试(t *testing.T) {
 func TestRetry_耗尽后返回最后一次的错误(t *testing.T) {
 	last := errors.New("第三次也不行")
 	n := 0
-	err := Retry(3, time.Second, time.Millisecond, func(context.Context) error {
+	err := Retry(context.Background(), 3, time.Second, time.Millisecond, func(context.Context) error {
 		n++
 		if n == 3 {
 			return last
@@ -106,7 +106,7 @@ func TestRetry_耗尽后返回最后一次的错误(t *testing.T) {
 func TestRetry_每次单独限时(t *testing.T) {
 	// 一次卡住不该把整轮预算吃光
 	var deadlines int
-	err := Retry(3, 20*time.Millisecond, time.Millisecond, func(ctx context.Context) error {
+	err := Retry(context.Background(), 3, 20*time.Millisecond, time.Millisecond, func(ctx context.Context) error {
 		<-ctx.Done()
 		deadlines++
 		return ctx.Err()
@@ -123,7 +123,7 @@ func TestRetry_总预算兜住整轮(t *testing.T) {
 	// 带总预算是为了让启动期收到的退出信号能及时生效：
 	// 不可中断的重试会让进程必须等满整轮才肯退出
 	start := time.Now()
-	Retry(5, 10*time.Millisecond, 10*time.Millisecond, func(ctx context.Context) error {
+	Retry(context.Background(), 5, 10*time.Millisecond, 10*time.Millisecond, func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -135,8 +135,46 @@ func TestRetry_总预算兜住整轮(t *testing.T) {
 
 func TestRetry_次数小于一也至少跑一次(t *testing.T) {
 	n := 0
-	Retry(0, time.Second, time.Millisecond, func(context.Context) error { n++; return nil })
+	Retry(context.Background(), 0, time.Second, time.Millisecond, func(context.Context) error { n++; return nil })
 	if n != 1 {
 		t.Errorf("至少该跑一次，got=%d", n)
+	}
+}
+
+func TestRetry_父ctx取消时立即中止(t *testing.T) {
+	// 启动期的建连重试靠这一条：收到退出信号时，进程不该被迫等满整轮。
+	// 三次尝试 × 每次 5s，不中断就是 10 秒起步，而信号已经来了
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	start := time.Now()
+
+	err := Retry(ctx, 3, 5*time.Second, 5*time.Second, func(context.Context) error {
+		calls++
+		cancel() // 第一次尝试进行中收到退出信号
+		return errors.New("连不上")
+	})
+
+	if err == nil {
+		t.Fatal("应当返回最后一次的错误")
+	}
+	if calls != 1 {
+		t.Errorf("取消之后不该再尝试，got=%d 次", calls)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("取消之后不该还在等重试间隔，耗时=%v", elapsed)
+	}
+}
+
+func TestRetry_父ctx传nil等同于Background(t *testing.T) {
+	n := 0
+	//nolint:staticcheck // 显式验证 nil 的兼容行为
+	if err := Retry(nil, 2, time.Second, time.Millisecond, func(context.Context) error {
+		n++
+		return nil
+	}); err != nil {
+		t.Fatalf("不该报错：%v", err)
+	}
+	if n != 1 {
+		t.Errorf("成功就不该重试，got=%d", n)
 	}
 }

@@ -17,6 +17,7 @@
 package xclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -122,14 +123,22 @@ func nameOf(name []string) string {
 // 任何一个建不起来就把已经建好的全关掉再返回错误：组件 Init 返回错误时
 // 框架拿不到 Closer，不自己收拾就会漏掉那几个连接池。
 //
+// ctx 一路传给 new，并在每个实例之前检查一次：配了五个库、第一个就要
+// 重试到超时的话，收到退出信号应当就此打住，而不是把剩下四个也挨个试一遍。
+//
 // 返回的 Closer 会在关闭时清空注册表，然后逆序关掉各实例。
-func Build[C, T any](r *Registry[T], cfgs map[string]C, new func(C) (T, io.Closer, error)) (io.Closer, error) {
+func Build[C, T any](ctx context.Context, r *Registry[T], cfgs map[string]C,
+	new func(context.Context, C) (T, io.Closer, error)) (io.Closer, error) {
 	built := make(map[string]T, len(cfgs))
 	var closers []io.Closer
 
 	// 名字排序后再建，让失败顺序可复现，日志顺序也稳定
 	for _, name := range sortedKeys(cfgs) {
-		v, closer, err := new(cfgs[name])
+		if err := ctx.Err(); err != nil {
+			closeAll(closers)
+			return nil, fmt.Errorf("建实例 %q 之前收到退出信号: %w", name, err)
+		}
+		v, closer, err := new(ctx, cfgs[name])
 		if err != nil {
 			closeAll(closers)
 			return nil, fmt.Errorf("实例 %q: %w", name, err)

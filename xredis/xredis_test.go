@@ -37,7 +37,7 @@ func deadAddr(t *testing.T) string {
 
 func TestNew_连得上就返回可用实例(t *testing.T) {
 	f := newFakeRedis(t)
-	client, closer, err := New(liveCfg(f))
+	client, closer, err := New(context.Background(), liveCfg(f))
 	if err != nil {
 		t.Fatalf("应当连得上：%v", err)
 	}
@@ -57,7 +57,7 @@ func TestNew_启动时就验证连通性(t *testing.T) {
 	f.setFailPing(true)
 
 	c := liveCfg(f)
-	_, _, err := New(c)
+	_, _, err := New(context.Background(), c)
 	if err == nil {
 		t.Fatal("Ping 失败时应当报错")
 	}
@@ -74,7 +74,7 @@ func TestNew_连不上时不漏连接池(t *testing.T) {
 
 	before := stabilize()
 	for i := 0; i < 5; i++ {
-		client, closer, err := New(c)
+		client, closer, err := New(context.Background(), c)
 		if err == nil {
 			closer.Close()
 			t.Fatal("连不上时应当报错")
@@ -94,7 +94,7 @@ func TestNew_密码不进日志(t *testing.T) {
 
 	c := liveCfg(f)
 	c.Password = "hunter2"
-	_, closer, err := New(c)
+	_, closer, err := New(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestNew_密码不进日志(t *testing.T) {
 func TestNew_配置有误时不建连(t *testing.T) {
 	c := DefaultClientConfig()
 	c.Addr = ""
-	if _, _, err := New(c); err == nil {
+	if _, _, err := New(context.Background(), c); err == nil {
 		t.Fatal("Addr 为空应当报错")
 	}
 }
@@ -125,7 +125,7 @@ func TestNew_传下去的连接池参数生效(t *testing.T) {
 	c := liveCfg(f)
 	c.PoolSize, c.MinIdleConns = 7, 2
 
-	client, closer, err := New(c)
+	client, closer, err := New(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +151,27 @@ func TestPingTimeout(t *testing.T) {
 	}
 }
 
+func TestNew_退出信号到达时当场放弃建连(t *testing.T) {
+	// 地址不通时这里要走满一轮 Ping 重试（默认 3 次 × 间隔）。
+	// 启动到一半收到 SIGTERM，就该立刻放弃，而不是让进程卡在一个
+	// 注定连不上的库上，把退出时间拖满整轮重试
+	f := newFakeRedis(t)
+	f.setFailPing(true)
+	c := liveCfg(f)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 模拟建连之前就收到了退出信号
+
+	start := time.Now()
+	_, _, err := New(ctx, c)
+	if err == nil {
+		t.Fatal("ctx 已取消时不该建连成功")
+	}
+	if elapsed := time.Since(start); elapsed > pingInterval {
+		t.Errorf("应当当场放弃而不是走完整轮重试，耗时=%v", elapsed)
+	}
+}
+
 func TestPing_重试后仍失败(t *testing.T) {
 	f := newFakeRedis(t)
 	f.setFailPing(true)
@@ -160,7 +181,7 @@ func TestPing_重试后仍失败(t *testing.T) {
 	defer client.Close()
 
 	start := time.Now()
-	if err := ping(client, c); err == nil {
+	if err := ping(context.Background(), client, c); err == nil {
 		t.Fatal("Ping 一直失败时应当返回错误")
 	}
 	if elapsed := time.Since(start); elapsed < 2*pingInterval {
@@ -252,7 +273,7 @@ func TestInitAll_建起来又关干净(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = Config{Clients: map[string]ClientConfig{"a": liveCfg(f), "b": liveCfg(f)}}
 
-	closer, err := initAll()
+	closer, err := initAll(context.Background())
 	if err != nil {
 		t.Fatalf("应当建得起来：%v", err)
 	}
@@ -279,7 +300,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	bad.DialTimeout, bad.ReadTimeout, bad.MinIdleConns = 30*time.Millisecond, 30*time.Millisecond, 0
 	cfg = Config{Clients: map[string]ClientConfig{"a": liveCfg(f), "z": bad}}
 
-	_, err := initAll()
+	_, err := initAll(context.Background())
 	if err == nil {
 		t.Fatal("有实例连不上时应当报错")
 	}
@@ -300,7 +321,7 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = DefaultConfig()
 
-	closer, err := initAll()
+	closer, err := initAll(context.Background())
 	if err != nil {
 		t.Fatalf("没配不该报错：%v", err)
 	}
@@ -354,7 +375,7 @@ func TestPoolCollector(t *testing.T) {
 
 func TestPoolStats_读的是活着的实例(t *testing.T) {
 	f := newFakeRedis(t)
-	client, closer, err := New(liveCfg(f))
+	client, closer, err := New(context.Background(), liveCfg(f))
 	if err != nil {
 		t.Fatal(err)
 	}

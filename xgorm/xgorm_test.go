@@ -49,7 +49,7 @@ func TestNew_连不上时不漏协程(t *testing.T) {
 	const rounds = 5
 	before := stabilize()
 	for i := 0; i < rounds; i++ {
-		db, closer, err := New(c)
+		db, closer, err := New(context.Background(), c)
 		if err == nil {
 			closer.Close()
 			t.Fatal("连不上时应当报错")
@@ -74,7 +74,7 @@ func TestNew_失败信息里有地址没有密码(t *testing.T) {
 	c.DialTimeout = 50 * time.Millisecond
 	c.MySQL.ReadTimeout = 50 * time.Millisecond
 
-	_, _, err := New(c)
+	_, _, err := New(context.Background(), c)
 	if err == nil {
 		t.Fatal("连不上时应当报错")
 	}
@@ -88,7 +88,7 @@ func TestNew_失败信息里有地址没有密码(t *testing.T) {
 
 func TestNew_配置有误时不建连(t *testing.T) {
 	c := DefaultClientConfig() // 没有 DSN
-	_, _, err := New(c)
+	_, _, err := New(context.Background(), c)
 	if err == nil {
 		t.Fatal("DSN 为空应当报错")
 	}
@@ -133,7 +133,7 @@ func TestPing_重试后仍失败(t *testing.T) {
 	c.MySQL.ReadTimeout = 30 * time.Millisecond
 
 	start := time.Now()
-	if err := ping(pool, c); err == nil {
+	if err := ping(context.Background(), pool, c); err == nil {
 		t.Fatal("连不上时应当返回错误")
 	}
 	elapsed := time.Since(start)
@@ -229,7 +229,7 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	t.Cleanup(func() { cfg = old })
 	cfg = DefaultConfig()
 
-	closer, err := initAll()
+	closer, err := initAll(context.Background())
 	if err != nil {
 		t.Fatalf("没配 XGorm 不该报错：%v", err)
 	}
@@ -252,7 +252,7 @@ func TestInitAll_一个失败就全部回滚(t *testing.T) {
 	cfg = Config{Clients: map[string]ClientConfig{"a": bad, "b": bad}}
 
 	before := stabilize()
-	_, err := initAll()
+	_, err := initAll(context.Background())
 	if err == nil {
 		t.Fatal("连不上时应当报错")
 	}

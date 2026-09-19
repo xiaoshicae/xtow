@@ -1,11 +1,14 @@
 package xtow
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,7 +46,7 @@ func comp(key string, stage registry.Stage, r *recorder, initErr error) registry
 	return registry.Component{
 		Key:   key,
 		Stage: stage,
-		Init: func() (io.Closer, error) {
+		Init: func(context.Context) (io.Closer, error) {
 			r.add("init:" + key)
 			if initErr != nil {
 				return nil, initErr
@@ -200,7 +203,7 @@ func TestRun_关闭出错会被汇总而不是吞掉(t *testing.T) {
 	err := Run(newServer(r), WithConfigPath(emptyConf(t)),
 		withComponents(registry.Component{
 			Key:  "stuck",
-			Init: func() (io.Closer, error) { return &closer{name: "stuck", r: r, err: closeErr}, nil },
+			Init: func(context.Context) (io.Closer, error) { return &closer{name: "stuck", r: r, err: closeErr}, nil },
 		}))
 
 	if !errors.Is(err, closeErr) {
@@ -213,7 +216,7 @@ func TestRun_组件panic被隔离(t *testing.T) {
 	err := Run(newServer(r), WithConfigPath(emptyConf(t)),
 		withComponents(registry.Component{
 			Key:  "panicky",
-			Init: func() (io.Closer, error) { panic("初始化炸了") },
+			Init: func(context.Context) (io.Closer, error) { panic("初始化炸了") },
 		}))
 
 	if err == nil || !strings.Contains(err.Error(), "panic") {
@@ -266,7 +269,7 @@ func TestRun_等服务真正退出再关组件(t *testing.T) {
 
 	comp := registry.Component{
 		Key: "Probe", Stage: registry.StageClient,
-		Init: func() (io.Closer, error) {
+		Init: func(context.Context) (io.Closer, error) {
 			return closerFunc(func() error {
 				mu.Lock()
 				defer mu.Unlock()
@@ -362,5 +365,179 @@ func TestRun_服务自己退出时立刻返回(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("服务自己退出时应当立刻返回，实际用了 %v", elapsed)
+	}
+}
+
+// ---- 启动期间收到退出信号 ----
+
+func TestRun_初始化期间收到信号就不启动服务(t *testing.T) {
+	// 信号接管必须早于初始化。装在初始化之后的话，连库、连 Redis、Ping 重试
+	// 那几秒里 SIGTERM 走的是系统默认处置——进程当场暴毙，已经建好的资源
+	// 一个都来不及注销（注册中心里那条记录、那把分布式锁只能等超时过期）
+	r := &recorder{}
+	started := false
+
+	slow := registry.Component{
+		Key:   "慢组件",
+		Stage: registry.StageClient,
+		Init: func(ctx context.Context) (io.Closer, error) {
+			r.add("init:慢组件")
+			syscallSelfInterrupt(t) // 正在初始化时收到退出信号
+			select {
+			case <-ctx.Done(): // 组件自己把 ctx 传下去了，于是当场就能放弃
+				r.add("慢组件被打断")
+			case <-time.After(3 * time.Second):
+				t.Error("组件的 ctx 没有被取消")
+			}
+			return &closer{name: "慢组件", r: r}, nil
+		},
+	}
+	after := comp("后面的组件", registry.StageServer, r, nil)
+
+	srv := &lateRunnable{
+		start: func(context.Context) error { started = true; return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+
+	if err := Run(srv, withComponents(slow, after), WithLogger(quietLogger())); err != nil {
+		t.Fatalf("按信号退出不是故障，不该报错：%v", err)
+	}
+	if started {
+		t.Error("初始化期间就收到了退出信号，不该再把服务起起来")
+	}
+	got := r.String()
+	if !strings.Contains(got, "慢组件被打断") {
+		t.Errorf("组件应当能从 ctx 感知到退出信号，got=%s", got)
+	}
+	if strings.Contains(got, "init:后面的组件") {
+		t.Errorf("收到退出信号后不该再初始化剩余组件，got=%s", got)
+	}
+	if !strings.Contains(got, "close:慢组件") {
+		t.Errorf("已经建好的组件仍要被逆序关干净，got=%s", got)
+	}
+}
+
+func TestRun_初始化被信号打断而失败时不算故障(t *testing.T) {
+	// 被取消的建连必然失败。把它当故障报上去的话，每次滚动更新撞上
+	// 这个窗口都会在面板上留一条「启动失败」，而它其实是按要求退出
+	r := &recorder{}
+	broken := registry.Component{
+		Key:   "连不上的库",
+		Stage: registry.StageClient,
+		Init: func(ctx context.Context) (io.Closer, error) {
+			syscallSelfInterrupt(t)
+			<-ctx.Done()
+			return nil, ctx.Err() // 建连被取消，如实返回错误
+		},
+	}
+	before := comp("先起来的", registry.StageLog, r, nil)
+
+	srv := &lateRunnable{
+		start: func(context.Context) error { t.Error("不该启动服务"); return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+
+	if err := Run(srv, withComponents(before, broken), WithLogger(quietLogger())); err != nil {
+		t.Fatalf("按信号退出不该以错误收场：%v", err)
+	}
+	if got := r.String(); !strings.Contains(got, "close:先起来的") {
+		t.Errorf("先起来的组件仍要被关掉，got=%s", got)
+	}
+}
+
+// stuckChildEnv 置位时，测试进程扮演「卡在初始化里的子进程」
+const stuckChildEnv = "XTOW_TEST_STUCK_CHILD"
+
+func TestRun_卡住时第二个信号能立即终止(t *testing.T) {
+	if os.Getenv(stuckChildEnv) == "1" {
+		runStuckChild()
+		return
+	}
+
+	// 注册信号处理这件事本身，取消了系统原本的「收到就死」。
+	// 于是框架一旦卡在某个不看 ctx 的第三方调用里（这里用 time.Sleep 模拟），
+	// 信号就只是往一个没人看的 ctx 里送——进程变成只有 kill -9 收得掉，
+	// K8s 得等满整个终止宽限期。第一个信号之后把默认处置还回去，
+	// 第二个信号才有地方可去。
+	// 用 os.Executable 而不是 os.Args[0]：定位配置文件的测试会改写 os.Args，
+	// 跑在它后面时 os.Args[0] 已经是那个测试编的假程序名了
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self, "-test.run=^TestRun_卡住时第二个信号能立即终止$")
+	cmd.Env = append(os.Environ(), stuckChildEnv+"=1")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	waitFor(t, stdout, "STUCK")
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // 让接管协程把默认处置还回去
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("子进程该被信号终止，got=%v", err)
+		}
+		st, ok := ee.Sys().(syscall.WaitStatus)
+		if !ok || !st.Signaled() || st.Signal() != syscall.SIGTERM {
+			t.Errorf("该以「被 SIGTERM 终止」收场（退出码 143），got=%v", ee)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("第二个信号没能终止卡住的子进程——只剩 kill -9 这一条路了")
+	}
+}
+
+// runStuckChild 起一个卡在初始化里、且不看 ctx 的进程
+func runStuckChild() {
+	stuck := registry.Component{
+		Key:   "卡住的组件",
+		Stage: registry.StageClient,
+		Init: func(context.Context) (io.Closer, error) {
+			fmt.Println("STUCK")
+			os.Stdout.Sync()
+			time.Sleep(60 * time.Second) // 模拟没有超时的第三方建连
+			return nil, nil
+		},
+	}
+	srv := &lateRunnable{
+		start: func(ctx context.Context) error { <-ctx.Done(); return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+	_ = Run(srv, withComponents(stuck), WithLogger(quietLogger()))
+}
+
+// waitFor 读子进程的输出直到出现 marker
+func waitFor(t *testing.T, r io.Reader, marker string) {
+	t.Helper()
+	found := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			if strings.Contains(sc.Text(), marker) {
+				close(found)
+				return
+			}
+		}
+	}()
+	select {
+	case <-found:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("没等到子进程输出 %q", marker)
 	}
 }

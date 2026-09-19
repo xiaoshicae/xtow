@@ -32,7 +32,10 @@ var pingInterval = time.Second
 //
 // 会先 Ping 一次确认连得上：地址写错、密码不对这类问题应该在启动时暴露，
 // 而不是等到线上第一次读缓存。
-func New(cfg ClientConfig) (*redis.Client, io.Closer, error) {
+//
+// ctx 限定这轮建连验证的生命期：连不上时要走满一轮重试，
+// 收到退出信号就该当场放弃，而不是让进程卡在那里。
+func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, nil, fmt.Errorf("xredis: 配置有误: %w", err)
 	}
@@ -71,7 +74,7 @@ func New(cfg ClientConfig) (*redis.Client, io.Closer, error) {
 		}
 	}
 
-	if err := ping(client, cfg); err != nil {
+	if err := ping(ctx, client, cfg); err != nil {
 		// 不带上原始错误的全部内容：go-redis 的认证错误里可能回显配置
 		return nil, nil, fmt.Errorf("xredis: 连不上 %s: %w", cfg.Addr, err)
 	}
@@ -83,9 +86,9 @@ func New(cfg ClientConfig) (*redis.Client, io.Closer, error) {
 	return client, &clientCloser{client: client, addr: cfg.Addr}, nil
 }
 
-// ping 建连验证，失败按固定间隔重试
-func ping(client *redis.Client, cfg ClientConfig) error {
-	return xutil.Retry(pingAttempts, pingTimeout(cfg), pingInterval, func(ctx context.Context) error {
+// ping 建连验证，失败按固定间隔重试；parent 取消时立即放弃
+func ping(parent context.Context, client *redis.Client, cfg ClientConfig) error {
+	return xutil.Retry(parent, pingAttempts, pingTimeout(cfg), pingInterval, func(ctx context.Context) error {
 		return client.Ping(ctx).Err()
 	})
 }
@@ -144,8 +147,8 @@ func init() {
 	})
 }
 
-func initAll() (io.Closer, error) {
-	closer, err := xclient.Build(reg, cfg.Clients, New)
+func initAll(ctx context.Context) (io.Closer, error) {
+	closer, err := xclient.Build(ctx, reg, cfg.Clients, New)
 	if err != nil {
 		return nil, err
 	}

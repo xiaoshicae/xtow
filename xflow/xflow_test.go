@@ -474,7 +474,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	}
 
 	withConfig(t, nil)
-	closer, err := got.Init()
+	closer, err := got.Init(context.Background())
 	if err != nil {
 		t.Errorf("默认配置不该校验失败：%v", err)
 	}
@@ -483,7 +483,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	}
 
 	cfg.RollbackTimeout = 0
-	if _, err := got.Init(); err == nil {
+	if _, err := got.Init(context.Background()); err == nil {
 		t.Error("非法配置应当让启动失败")
 	}
 }

@@ -1,6 +1,7 @@
 package xlog
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -141,7 +142,7 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageLog,
 		Config: &cfg,
-		Init: func() (io.Closer, error) {
+		Init: func(context.Context) (io.Closer, error) {
 			l, c, err := New(cfg)
 			if err != nil {
 				return nil, err

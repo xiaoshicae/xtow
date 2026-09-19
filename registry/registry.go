@@ -6,6 +6,7 @@
 package registry
 
 import (
+	"context"
 	"io"
 	"sync"
 )
@@ -39,7 +40,11 @@ type Component struct {
 	// Config 指向已填好默认值的配置结构体，框架把 Key 那一段解进去。
 	Config any
 	// Init 配置就绪后调用。返回的 Closer 会在退出时被逆序关闭。
-	Init func() (io.Closer, error)
+	//
+	// ctx 是整个进程的启动生命期：收到退出信号时它会被取消。
+	// 会阻塞的初始化（建连、重试、探测）必须把它传下去——
+	// 否则启动到一半收到 SIGTERM 时，进程只能卡在那里等它自己跑完。
+	Init func(ctx context.Context) (io.Closer, error)
 }
 
 var (

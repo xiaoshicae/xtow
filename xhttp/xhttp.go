@@ -196,7 +196,7 @@ func init() {
 	})
 }
 
-func initClient() (io.Closer, error) {
+func initClient(context.Context) (io.Closer, error) {
 	client, closer, err := New(cfg)
 	if err != nil {
 		return nil, err

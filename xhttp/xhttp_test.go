@@ -123,7 +123,7 @@ func TestTransport_otelhttp在noop下仍然注入透传Header(t *testing.T) {
 	tc := xtrace.DefaultConfig()
 	tc.Enable = false // 链路关掉
 	tc.ForwardHeaders = []string{"X-Request-Id"}
-	tr, tcloser, err := xtrace.New(tc)
+	tr, tcloser, err := xtrace.New(context.Background(), tc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestInit_没配也能用(t *testing.T) {
 		mu.Unlock()
 	})
 
-	closer, err := initClient()
+	closer, err := initClient(context.Background())
 	if err != nil {
 		t.Fatalf("没配不该报错：%v", err)
 	}

@@ -1,6 +1,7 @@
 package xflow
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"time"
@@ -48,7 +49,7 @@ func init() {
 	registry.Register(registry.Component{
 		Key:    ConfigKey,
 		Config: &cfg,
-		Init: func() (io.Closer, error) {
+		Init: func(context.Context) (io.Closer, error) {
 			if err := cfg.validate(); err != nil {
 				return nil, fmt.Errorf("xflow: 配置有误: %w", err)
 			}

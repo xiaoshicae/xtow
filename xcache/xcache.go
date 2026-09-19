@@ -1,6 +1,7 @@
 package xcache
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -113,9 +114,9 @@ func init() {
 	})
 }
 
-func initAll() (io.Closer, error) {
-	closer, err := xclient.Build(reg, cfg.Clients,
-		func(c ClientConfig) (instance, io.Closer, error) {
+func initAll(ctx context.Context) (io.Closer, error) {
+	closer, err := xclient.Build(ctx, reg, cfg.Clients,
+		func(_ context.Context, c ClientConfig) (instance, io.Closer, error) {
 			cache, closer, err := New(c)
 			return instance{cache: cache, ttl: c.DefaultTTL}, closer, err
 		})

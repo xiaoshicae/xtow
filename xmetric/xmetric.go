@@ -1,6 +1,7 @@
 package xmetric
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -192,7 +193,7 @@ func init() {
 		Key:    ConfigKey,
 		Stage:  registry.StageTelemetry,
 		Config: &cfg,
-		Init: func() (io.Closer, error) {
+		Init: func(context.Context) (io.Closer, error) {
 			m, closer, err := New(cfg)
 			if err != nil {
 				return nil, err

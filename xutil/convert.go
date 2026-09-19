@@ -22,16 +22,21 @@ func GetOrDefault[T comparable](v, defaultV T) T {
 // Retry 反复调用 fn 直到成功，每次单独限时，两次之间隔 interval。
 //
 // 整轮有一个总预算（attempts × timeout + 间隔之和），到了就不再重试。
-// 带总预算是为了让启动期收到的退出信号能及时生效：不可中断的重试会让进程
-// 必须等满整轮才肯退出。
+//
+// parent 被取消时整轮立即中止，剩下的尝试和等待都不再进行。
+// 启动期的建连重试靠这一条：收到退出信号时进程不必等满整轮才肯退出。
+// 传 nil 等同于 context.Background()。
 //
 // 返回最后一次的错误；一次都没成功且预算先耗尽时，返回的是耗尽前那次的错误。
-func Retry(attempts int, timeout, interval time.Duration, fn func(context.Context) error) error {
+func Retry(parent context.Context, attempts int, timeout, interval time.Duration, fn func(context.Context) error) error {
 	if attempts < 1 {
 		attempts = 1
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
 	budget := timeout*time.Duration(attempts) + interval*time.Duration(attempts-1)
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 
 	var last error

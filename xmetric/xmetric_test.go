@@ -285,7 +285,7 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 	cfg.Namespace = "wired"
 	cfg.GoMetrics, cfg.ProcessMetrics = false, false
 
-	closer, err := got.Init()
+	closer, err := got.Init(context.Background())
 	if err != nil {
 		t.Fatalf("初始化失败：%v", err)
 	}
