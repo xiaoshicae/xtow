@@ -56,10 +56,14 @@ type Config struct {
 	// IdleTimeout keep-alive 连接的空闲超时。默认 60s。
 	IdleTimeout time.Duration `yaml:"IdleTimeout"`
 
-	// ShutdownTimeout 优雅退出的等待上限。默认 25s，必须大于 0。
+	// ShutdownTimeout 优雅退出时等在途请求做完的上限。默认 10s，必须大于 0。
 	//
-	// 要小于部署环境给的终止宽限期（K8s 默认 30s）：两者相等意味着
-	// Shutdown 还没走完进程就被 SIGKILL，等于没有优雅退出。
+	// 这是「HTTP 服务能占用的那一份」，不是整个退出流程的预算——后者是
+	// xtow.WithStopTimeout（默认 15s），两者取更早的那个截止时间。
+	// 所以这一项配得比总预算大没有意义，该调的是总预算。
+	//
+	// 总预算要小于部署环境给的终止宽限期（K8s 默认 30s）：两者相等意味着
+	// 关闭还没走完进程就被 SIGKILL，等于没有优雅退出。
 	//
 	// 注意 0 不是「不限时」而是「一点都不等」：它会让 Shutdown 拿到一个
 	// 已经过期的 context，在途请求当场被切断。所以这里拦住它。
@@ -80,7 +84,7 @@ func DefaultConfig() Config {
 		Port:              8080,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
-		ShutdownTimeout:   25 * time.Second,
+		ShutdownTimeout:   10 * time.Second,
 		Mode:              "release",
 	}
 }

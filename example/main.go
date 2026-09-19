@@ -1,6 +1,6 @@
 // 一个最小的可运行示例：配置文件决定行为，main 里没有装配代码。
 //
-//	go run ./example --config=example/application.yml
+//	cd example && go run . --config=application.yml
 package main
 
 import (

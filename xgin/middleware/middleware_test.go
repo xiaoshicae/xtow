@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -385,4 +386,63 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	}
 	r.done = true
 	return copy(p, r.data), nil
+}
+
+// countingBody 记下被读走了多少字节，用来看清究竟缓冲了多少
+type countingBody struct {
+	r      io.Reader
+	read   int
+	closed bool
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.read += n
+	return n, err
+}
+func (b *countingBody) Close() error { b.closed = true; return nil }
+
+func TestSnapshotBody_只缓存前缀不整个读进内存(t *testing.T) {
+	// maxRequestBody 限的是「记多少日志」，不该顺手变成「缓冲多少请求体」。
+	// 整个读进来的话，一个大上传会躺进内存，而且 handler 要等它全部落地
+	// 才能开始处理
+	const total = 3 * maxRequestBody
+	body := &countingBody{r: bytes.NewReader(bytes.Repeat([]byte("x"), total))}
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Body, req.GetBody = body, nil
+	req.Header.Set("Content-Type", "application/json")
+
+	got := snapshotBody(req)
+
+	if len(got) != maxRequestBody {
+		t.Errorf("记日志只该留前 %d 字节，got=%d", maxRequestBody, len(got))
+	}
+	if body.read > maxRequestBody+4096 {
+		t.Errorf("只该读走前缀，实际已读 %d 字节（共 %d）", body.read, total)
+	}
+
+	// 下游仍要读得到完整的请求体
+	rest, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != total {
+		t.Errorf("下游该拿到完整请求体 %d 字节，got=%d", total, len(rest))
+	}
+}
+
+func TestSnapshotBody_Close落到原始body上(t *testing.T) {
+	// 换成 io.NopCloser 就等于把 http.Request 的关闭语义吃掉了
+	body := &countingBody{r: bytes.NewReader([]byte(`{"a":1}`))}
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Body, req.GetBody = body, nil
+	req.Header.Set("Content-Type", "application/json")
+
+	snapshotBody(req)
+	if err := req.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !body.closed {
+		t.Error("Close 该落到原始 body 上")
+	}
 }

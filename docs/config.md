@@ -229,7 +229,9 @@ XGin:
   ReadTimeout: 0s          # 默认不限制：限制它会打断大文件上传
   WriteTimeout: 0s         # 默认不限制：限制它会打断 SSE、长轮询、大文件下载
   IdleTimeout: 60s
-  ShutdownTimeout: 25s     # 要小于部署环境的终止宽限期（K8s 默认 30s），必须 > 0
+  ShutdownTimeout: 10s     # HTTP 服务能占的那一份，必须 > 0
+                           # 整个退出流程的总预算是 xtow.WithStopTimeout（默认 15s），
+                           # 两者取更早的那个截止时间，所以这项配得比总预算大没有意义
 ```
 
 中间件的开关不在配置里，在代码里：

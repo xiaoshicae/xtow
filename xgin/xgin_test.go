@@ -77,9 +77,10 @@ func TestConfig_默认值(t *testing.T) {
 	if c.ReadHeaderTimeout != 10*time.Second {
 		t.Errorf("读请求头必须有超时，got=%v", c.ReadHeaderTimeout)
 	}
-	// 小于 K8s 的 30s 宽限期，否则 Shutdown 还没走完就被 SIGKILL
-	if c.ShutdownTimeout != 25*time.Second || c.ShutdownTimeout >= 30*time.Second {
-		t.Errorf("优雅退出预算应小于常见的终止宽限期，got=%v", c.ShutdownTimeout)
+	// 这是「HTTP 服务能占用的那一份」，必须小于框架的总预算（默认 15s），
+	// 否则这一项是死配置——两者取更早的那个截止时间
+	if c.ShutdownTimeout != 10*time.Second || c.ShutdownTimeout >= 15*time.Second {
+		t.Errorf("服务那一份预算应小于框架总预算，got=%v", c.ShutdownTimeout)
 	}
 	// 线上忘了设环境变量的代价，比本地少一行提示大得多
 	if c.Mode != "release" {
@@ -332,17 +333,73 @@ func TestStop_没启动过也安全(t *testing.T) {
 	}
 }
 
-func TestStop_不吃光框架给的停止预算(t *testing.T) {
-	// 框架给的停止预算是所有组件共享的，HTTP 服务占满了，
-	// 后面的数据库、缓存就没时间关了。所以这里自带上限，不完全跟随调用方的 ctx
-	withConfig(t, func(c *Config) { c.ShutdownTimeout = 50 * time.Millisecond })
-	g := New()
+// servingWithHungRequest 起一个服务，并让一个请求挂在 handler 里不返回，
+// 这样 Shutdown 必须等它 —— 才测得出等多久
+func servingWithHungRequest(t *testing.T) *XGin {
+	t.Helper()
+	port := freePort(t)
+	withConfig(t, func(c *Config) { c.Host, c.Port = "127.0.0.1", port })
 
-	// 传一个已经取消的 ctx：Shutdown 仍应按自己的预算走完，不是立刻失败
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := g.Stop(ctx); err != nil {
-		t.Errorf("没启动过时应直接返回，got=%v", err)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	g := New(WithLog(false), WithMetric(false)).WithRoutes(func(e *gin.Engine) {
+		e.GET("/ping", func(c *gin.Context) { c.Status(200) })
+		e.GET("/hang", func(c *gin.Context) { <-release; c.Status(200) })
+	})
+	go g.Start(context.Background())
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitServing(t, base+"/ping")
+
+	hung := make(chan struct{})
+	go func() {
+		defer close(hung)
+		if resp, err := http.Get(base + "/hang"); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	// 等这个请求真的到了 handler 里，否则 Shutdown 可能在它之前就走完了
+	time.Sleep(100 * time.Millisecond)
+	return g
+}
+
+func TestStop_不超过调用方给的截止时间(t *testing.T) {
+	// 回归用例。这里曾经用 context.WithoutCancel 换掉调用方的 ctx，于是
+	// ShutdownTimeout 配得比框架总预算大时，会实打实地等满自己那一份——
+	// 「所有组件共享一份预算」就成了一句空话
+	g := servingWithHungRequest(t)
+	withConfig(t, func(c *Config) { c.ShutdownTimeout = 30 * time.Second })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := g.Stop(ctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Fatalf("该按调用方的截止时间收手，实际等了 %v", elapsed)
+	}
+	if err == nil {
+		t.Error("在途请求没做完就到点了，该如实报错")
+	}
+}
+
+func TestStop_也不超过自己那一份预算(t *testing.T) {
+	// 另一半：调用方给的很宽时，服务自己的上限仍然生效，
+	// 不然后面的数据库、缓存就没时间关了
+	g := servingWithHungRequest(t)
+	withConfig(t, func(c *Config) { c.ShutdownTimeout = 200 * time.Millisecond })
+
+	start := time.Now()
+	err := g.Stop(context.Background())
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Fatalf("自己那一份上限没生效，实际等了 %v", elapsed)
+	}
+	if err == nil {
+		t.Error("在途请求没做完就到点了，该如实报错")
 	}
 }
 
@@ -474,5 +531,68 @@ func TestStart_Mode在启动时才设(t *testing.T) {
 
 	if gin.Mode() != gin.DebugMode {
 		t.Errorf("启动时应按配置设 Mode，got=%q", gin.Mode())
+	}
+}
+
+func TestWithConfig_两个实例监听各自的端口(t *testing.T) {
+	// 没有这个选项时两个实例读的是同一份包级配置，只能监听同一个端口——
+	// 「需要两套配置时也有出路」这条承诺对 xgin 就是假的
+	withConfig(t, nil) // 包级配置故意留在默认端口上，证明谁都没读它
+
+	portA, portB := freePort(t), freePort(t)
+	newOn := func(port int, body string) *XGin {
+		c := CurrentConfig()
+		c.Host, c.Port = "127.0.0.1", port
+		g := New(WithConfig(c), WithLog(false), WithMetric(false)).
+			WithRoutes(func(e *gin.Engine) {
+				e.GET("/who", func(c *gin.Context) { c.String(200, body) })
+			})
+		go g.Start(context.Background())
+		t.Cleanup(func() { g.Stop(context.Background()) })
+		return g
+	}
+	newOn(portA, "A")
+	newOn(portB, "B")
+
+	for _, c := range []struct {
+		port int
+		want string
+	}{{portA, "A"}, {portB, "B"}} {
+		url := fmt.Sprintf("http://127.0.0.1:%d/who", c.port)
+		waitServing(t, url)
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatalf("端口 %d 打不通：%v", c.port, err)
+		}
+		got, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(got) != c.want {
+			t.Errorf("端口 %d 该是实例 %s，got=%q", c.port, c.want, got)
+		}
+	}
+}
+
+func TestWithConfig_不给就跟着配置文件走(t *testing.T) {
+	// 默认路径不能因为多了这个选项而改变
+	port := freePort(t)
+	withConfig(t, func(c *Config) { c.Host, c.Port = "127.0.0.1", port })
+
+	g := New(WithLog(false), WithMetric(false)).WithRoutes(func(e *gin.Engine) {
+		e.GET("/ping", func(c *gin.Context) { c.Status(200) })
+	})
+	go g.Start(context.Background())
+	t.Cleanup(func() { g.Stop(context.Background()) })
+	waitServing(t, fmt.Sprintf("http://127.0.0.1:%d/ping", port))
+}
+
+func TestConf_配置在用的时候才读(t *testing.T) {
+	// New 可能发生在配置加载之前（使用者在 main 顶上就把 XGin 建好了），
+	// 那时候读一次的话，配置文件从此再也不生效
+	withConfig(t, func(c *Config) { c.Port = 1 })
+	g := New()
+	withConfig(t, func(c *Config) { c.Port = 2 })
+
+	if got := g.conf().Port; got != 2 {
+		t.Errorf("该读到 New 之后才加载进来的配置，got=%d", got)
 	}
 }

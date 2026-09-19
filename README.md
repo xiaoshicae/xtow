@@ -39,11 +39,16 @@ XMetric:
 
 没有 `Manage`、没有 `Serve`、没有适配器类型、没有初始化样板。
 
-`example/` 是一个可以直接跑的完整示例：
+`example/` 是一个可以直接跑的完整示例。它是独立的 module，所以进目录跑：
 
 ```bash
-go run ./example --config=example/application.yml
+cd example && go run . --config=application.yml
 ```
+
+仓库里提交了 `go.work`（11 个模块，彼此靠 `replace` 互指），所以在根目录
+`go run ./example --config=example/application.yml` 也能跑，IDE 打开根目录
+也认得全部模块。但 `./check.sh` 和 `./test.sh` 一律用 `GOWORK=off` 逐模块跑——
+工作区会遮住某个模块自己 `go.mod` 的问题，那必须由 CI 抓出来。
 
 ---
 
@@ -151,6 +156,16 @@ xtow 的做法是三件事一起：
    只有 `kill -9` 收得掉，K8s 得等满整个终止宽限期。
 
 第 3 条同样覆盖关闭阶段：`Stop` 卡住时，第二次 Ctrl+C 有用。
+
+### 停止预算是一份，不是每个组件一份
+
+`xtow.WithStopTimeout`（默认 15s）是**整个退出流程**的总预算，它必须真的管住
+每一步，否则就只是一句话：
+
+- `XGin.ShutdownTimeout`（默认 10s）是 HTTP 服务能占的那一份，与总预算
+  **取更早的那个截止时间**——既不会占满总预算，也不会超出它。
+- 组件的 `Close()` 没有 `ctx` 可传，所以框架另起协程去等，到点就不再等它。
+  一个连接池关不掉，不该让后面每个组件、以及进程本身都排在它后面。
 
 ### 三个模块共用的那一份
 

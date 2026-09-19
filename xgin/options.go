@@ -6,7 +6,21 @@ package xgin
 // xgin.New(options.EnableLogMiddleware(false)) 短，也少一个包要 import。
 type Option func(*settings)
 
+// WithConfig 用这份配置起服务，不再读配置文件里的 XGin 块。
+//
+// 一个进程里起第二个服务时用它——比如对外的 API 一个端口、内部的管理端口
+// 另一个。不给它的话两个实例读的是同一份包级配置，只能监听同一个端口。
+//
+//	admin := xgin.New(xgin.WithConfig(xgin.Config{Host: "127.0.0.1", Port: 9090, ...}))
+//
+// 注意传进来的是完整配置，不是补丁：想在文件配置的基础上改两项，
+// 先取 xgin.CurrentConfig() 再改。
+func WithConfig(c Config) Option { return func(s *settings) { s.override = &c } }
+
 type settings struct {
+	// override 见 WithConfig
+	override *Config
+
 	log        bool
 	trace      bool
 	metric     bool

@@ -541,3 +541,69 @@ func waitFor(t *testing.T, r io.Reader, marker string) {
 		t.Fatalf("没等到子进程输出 %q", marker)
 	}
 }
+
+// ---- 停止预算 ----
+
+func TestShutdown_关不掉的组件不拖住其余组件(t *testing.T) {
+	// WithStopTimeout 说的是「所有组件共享的停止预算」，而 io.Closer.Close()
+	// 没有 ctx。不看着它就等于没有上限——一个连接池关不掉，整个进程就陪着它
+	// 挂到部署环境来 SIGKILL 为止
+	r := &recorder{}
+	stuck := registry.Component{
+		Key: "关不掉的", Stage: registry.StageClient,
+		Init: func(context.Context) (io.Closer, error) {
+			return closerFunc(func() error { select {} }), nil
+		},
+	}
+	after := comp("先关的", registry.StageServer, r, nil)
+
+	srv := &lateRunnable{
+		start: func(context.Context) error { return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+
+	start := time.Now()
+	err := Run(srv, withComponents(stuck, after), WithLogger(quietLogger()),
+		WithStopTimeout(300*time.Millisecond))
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Fatalf("卡住的 Close 把整个退出流程拖住了，耗时=%v", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "关不掉的") {
+		t.Errorf("该如实报告是哪个组件没关掉，got=%v", err)
+	}
+	// 卡住的那个排在后面关，它之前的仍要被关掉
+	if got := r.String(); !strings.Contains(got, "close:先关的") {
+		t.Errorf("卡住的组件不该拦住其余组件，got=%s", got)
+	}
+}
+
+func TestShutdown_初始化失败时的关闭也有预算(t *testing.T) {
+	// 这一支还没有 stopCtx，但已经建好的那几个照样可能关不掉
+	stuck := registry.Component{
+		Key: "关不掉的", Stage: registry.StageLog,
+		Init: func(context.Context) (io.Closer, error) {
+			return closerFunc(func() error { select {} }), nil
+		},
+	}
+	boom := registry.Component{
+		Key: "起不来的", Stage: registry.StageClient,
+		Init: func(context.Context) (io.Closer, error) { return nil, errors.New("起不来") },
+	}
+
+	srv := &lateRunnable{
+		start: func(context.Context) error { t.Error("不该启动服务"); return nil },
+		stop:  func(context.Context) error { return nil },
+	}
+
+	start := time.Now()
+	err := Run(srv, withComponents(stuck, boom), WithLogger(quietLogger()),
+		WithStopTimeout(300*time.Millisecond))
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("启动失败后的关闭没有预算，耗时=%v", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "起不来") {
+		t.Errorf("初始化失败的原因该带出来，got=%v", err)
+	}
+}

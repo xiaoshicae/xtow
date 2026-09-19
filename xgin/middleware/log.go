@@ -208,22 +208,31 @@ func snapshotBody(req *http.Request) []byte {
 		}
 	}
 
-	// 退路：整个读出来，再塞一个等价的 Body 回去。
+	// 退路：只读前 maxRequestBody 字节，剩下的原样留在流里。
 	//
-	// 无论读成功与否都要把读到的还回去：读一半出错就 return 的话，
-	// 那半截请求体已经消失了，下游 handler 拿到的是个空 body——
+	// 不能整个读进来。maxRequestBody 限的是「记多少日志」，不该顺手变成
+	// 「缓冲多少请求体」：一个 500MB 的 JSON 上传会整个躺进内存，而且
+	// handler 要等它全部落地才能开始处理。记一行日志不配有这种代价。
+	//
+	// 读出错也要把已经读到的接回去：读一半就 return 的话，那半截请求体
+	// 已经消失了，下游 handler 拿到的是个缺头的 body——
 	// 记日志这件事不该有能力改变请求本身。
-	head, headErr := io.ReadAll(io.LimitReader(req.Body, maxRequestBody))
-	rest, restErr := io.ReadAll(req.Body) // 超出上限的部分照样要还给下游
-	req.Body.Close()
-
-	full := make([]byte, 0, len(head)+len(rest))
-	full = append(append(full, head...), rest...)
-	req.Body = io.NopCloser(bytes.NewReader(full))
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(full)), nil }
-
-	if headErr != nil || restErr != nil {
-		return nil // 读不全就不记，但下游拿到的是我们读到的全部
+	head, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBody))
+	req.Body = prefixedBody{
+		Reader: io.MultiReader(bytes.NewReader(head), req.Body),
+		Closer: req.Body,
+	}
+	if err != nil {
+		return nil // 读不全就不记，但下游拿到的仍是完整的请求体
 	}
 	return head
+}
+
+// prefixedBody 把已经读走的前缀接回请求体前面。
+//
+// Close 仍然落到原始 body 上——它才是真正持有连接的那个，
+// 换成 io.NopCloser 就等于把 http.Request 的关闭语义吃掉了。
+type prefixedBody struct {
+	io.Reader
+	io.Closer
 }

@@ -1,7 +1,13 @@
-# 本地多模块开发用，不进版本库
-go.work
-go.work.sum
+# go.work 入库：这是个 11 模块的仓库，模块之间靠 replace 互指。
+# 不提交的话，每个人都要自己拼一份，IDE 打开根目录只认得根模块，
+# README 里的 go run ./example 也是假的。
+# 注意 check.sh / test.sh 一律用 GOWORK=off 逐模块跑——
+# 工作区会遮住某个模块自己 go.mod 的问题，那必须由 CI 抓出来。
 
 # 构建产物
 /bin/
 *.out
+
+# go build 默认把二进制产在包目录里，名字就是目录名。
+# 误提交过一次 example/example（36.9 MB），所以这里按「无扩展名的可执行文件」挡
+/example/example

@@ -70,17 +70,36 @@ func capture(t *testing.T) func() []map[string]any {
 	}
 }
 
+// climbTo 等协程数涨到 want，最多等 d，返回最后一次读数
+func climbTo(want int, d time.Duration) int {
+	deadline := time.Now().Add(d)
+	n := runtime.NumGoroutine()
+	for n < want && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		n = runtime.NumGoroutine()
+	}
+	return n
+}
+
 func TestSettle_能看见泄漏的协程(t *testing.T) {
 	// 先验证这把尺子是准的——一条永远不会失败的测试比没有测试更糟，
 	// 它让人以为查过了
+	const leak = 5
 	before := stabilize()
+
 	stop := make(chan struct{})
-	for i := 0; i < 5; i++ {
+	for i := 0; i < leak; i++ {
 		go func() { <-stop }()
 	}
-	if during := settleTo(before); during <= before {
-		t.Fatalf("漏了 5 个协程却没看出增长（%d -> %d），这把尺子是坏的", before, during)
+
+	// 用 climbTo 而不是 settleTo 来判断「涨了没有」。
+	// settleTo 的判据是「回落到 target 以内」，拿它判断增长有两个毛病：
+	// 打乱顺序跑时，上一个用例的协程正在退场，它会当场判定「已回落」而误报；
+	// 没误报的时候又必然烧满整个 10 秒预算才肯返回。
+	if during := climbTo(before+leak, 3*time.Second); during < before+leak {
+		t.Fatalf("漏了 %d 个协程却没看出增长（%d -> %d），这把尺子是坏的", leak, before, during)
 	}
+
 	close(stop)
 	if after := settleTo(before); after > before+1 {
 		t.Errorf("协程退出后应当回落，got %d -> %d", before, after)

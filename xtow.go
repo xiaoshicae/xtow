@@ -77,9 +77,9 @@ func Run(r Runnable, opts ...Option) error {
 			attrs = append(attrs, "interrupted_init", err)
 		}
 		o.log().Info("shutdown signal received during init, not starting the server", attrs...)
-		return shutdown(closers, o)
+		return shutdownWithin(o, closers)
 	case err != nil:
-		return errors.Join(err, shutdown(closers, o))
+		return errors.Join(err, shutdownWithin(o, closers))
 	}
 
 	runErr := make(chan error, 1)
@@ -115,7 +115,17 @@ func Run(r Runnable, opts ...Option) error {
 		}
 	}
 
-	return errors.Join(first, shutdown(closers, o))
+	return errors.Join(first, shutdown(stopCtx, closers, o))
+}
+
+// shutdownWithin 启动阶段失败时的关闭，自己开一份停止预算。
+//
+// 这一支没有 stopCtx——服务还没起来，那个 ctx 还没造出来。
+// 但预算同样要有：初始化到一半失败时，已经建好的那几个照样可能关不掉。
+func shutdownWithin(o options, closers []named) error {
+	ctx, cancel := context.WithTimeout(context.Background(), o.stopTimeout)
+	defer cancel()
+	return shutdown(ctx, closers, o)
 }
 
 // loadConfigInto 定位并加载配置。
@@ -178,16 +188,41 @@ func initAll(ctx context.Context, list []registry.Component, o options) ([]named
 	return closers, nil
 }
 
-func shutdown(closers []named, o options) error {
+// shutdown 逆序关闭已初始化的组件，整个过程共享 ctx 里剩下的预算。
+//
+// 预算必须落到这里才算数：WithStopTimeout 说的是「所有组件共享的停止预算」，
+// 而 io.Closer.Close() 没有 ctx，不看着它就等于没有上限——一个连接池
+// 关不掉，整个进程就陪着它挂到部署环境来 SIGKILL 为止。
+func shutdown(ctx context.Context, closers []named, o options) error {
 	var errs []error
 	for i := len(closers) - 1; i >= 0; i-- {
 		n := closers[i]
 		o.log().Info("closing", "component", n.key)
-		if err := safe(n.key, func() error { return n.c.Close() }); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", n.key, err))
+		if err := closeWithin(ctx, n); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// closeWithin 在预算内关掉一个组件，超时就不再等它。
+//
+// Close 没有 ctx 可传，所以只能另起一个协程去等。超时之后那个协程还挂在
+// 原地——这是有意的：强行放弃它，好过让后面每一个组件、以及进程本身，
+// 都排在一个关不掉的资源后面。进程马上就要退出了，漏一个协程没有下文。
+func closeWithin(ctx context.Context, n named) error {
+	done := make(chan error, 1)
+	go func() { done <- safe(n.key, n.c.Close) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("%s: %w", n.key, err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%s: close did not finish within the stop budget: %w", n.key, ctx.Err())
+	}
 }
 
 // safeInit 执行组件的 Init 并隔离 panic

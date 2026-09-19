@@ -60,7 +60,7 @@ done
 
 echo "== 4. 确认去掉 replace 之后还能编译 =="
 if [ "$APPLY" = "--apply" ]; then
-  echo "  （tag 还没打，此时依赖拉不到，跳过；推送 tag 之后再验证）"
+  echo "  （tag 还没打，此时依赖拉不到，跳过——改由推送后的 verify.sh 验证）"
 fi
 
 echo "== 5. 提交并打 tag =="
@@ -81,9 +81,10 @@ if [ "$APPLY" = "--apply" ]; then
   git push origin main --tags
 
 推送之后 tag 就被 module proxy 永久缓存了，删不掉，只能再发一版盖过去。
-推完验证一下别人装不装得上：
+推完必须验证一遍别人装不装得上 —— CI 跑的是工作区里的代码，
+证明不了发布出去的版本能装：
 
-  cd \$(mktemp -d) && go mod init probe && go get $MOD/xgorm@$VERSION
+  ./verify.sh $VERSION
 TIP
 else
   echo "以上是 --apply 时会执行的命令，当前什么都没改。"

@@ -30,6 +30,10 @@ import (
 // 这样「集成不依赖框架」这条在编译层面仍然成立。
 type XGin struct {
 	settings settings
+
+	// override 实例级配置，非 nil 时压过配置文件里的 XGin 块。
+	// 由 WithConfig 设置，见那里的说明。
+	override *Config
 	routes   []func(*gin.Engine)
 	extra    []gin.HandlerFunc
 	recover  gin.RecoveryFunc
@@ -48,8 +52,14 @@ func New(opts ...Option) *XGin {
 	for _, o := range opts {
 		o(&s)
 	}
-	return &XGin{settings: s}
+	return &XGin{settings: s, override: s.override}
 }
+
+// CurrentConfig 返回配置文件里 XGin 那一块解出来的配置（拷贝）。
+//
+// 配合 WithConfig 用：想在文件配置的基础上只改两项，取一份改完再传回去。
+// 要在配置加载之后调用，否则拿到的是默认值。
+func CurrentConfig() Config { return cfg }
 
 // WithRoutes 注册路由。可以调用多次，按调用顺序生效。
 func (g *XGin) WithRoutes(f ...func(*gin.Engine)) *XGin {
@@ -132,18 +142,31 @@ func (g *XGin) build() {
 	})
 }
 
+// conf 取这个实例该用的配置。
+//
+// 默认读配置文件里的 XGin 块，而且是在用的时候才读、不在 New 里读：
+// New 可能发生在配置加载之前（使用者在 main 顶上就把 XGin 建好了），
+// 那时候读到的是一份默认值，配置文件从此再也不生效。
+func (g *XGin) conf() Config {
+	if g.override != nil {
+		return *g.override
+	}
+	return cfg
+}
+
 // Start 启动服务并阻塞到它停止。由 xtow.Run 调用。
 func (g *XGin) Start(ctx context.Context) error {
-	if err := cfg.validate(); err != nil {
+	c := g.conf()
+	if err := c.validate(); err != nil {
 		return fmt.Errorf("xgin: invalid config: %w", err)
 	}
 	// 在这里设而不是在装配里：装配可能发生在配置加载之前，
 	// 那时读到的是默认值，配置里写的 Mode 从此再也不生效
-	gin.SetMode(cfg.Mode)
+	gin.SetMode(c.Mode)
 	g.build()
 
-	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	srv := g.newServer(addr)
+	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+	srv := g.newServer(c, addr)
 
 	g.mu.Lock()
 	if g.stopping {
@@ -160,11 +183,11 @@ func (g *XGin) Start(ctx context.Context) error {
 	g.srv = srv
 	g.mu.Unlock()
 
-	slog.Info("xgin listening", "addr", addr, "tls", cfg.tlsEnabled(), "h2c", cfg.UseH2C && !cfg.tlsEnabled())
+	slog.Info("xgin listening", "addr", addr, "tls", c.tlsEnabled(), "h2c", c.UseH2C && !c.tlsEnabled())
 
 	var err error
-	if cfg.tlsEnabled() {
-		err = srv.ListenAndServeTLS(cfg.CertFile, cfg.KeyFile)
+	if c.tlsEnabled() {
+		err = srv.ListenAndServeTLS(c.CertFile, c.KeyFile)
 	} else {
 		err = srv.ListenAndServe()
 	}
@@ -185,9 +208,14 @@ func (g *XGin) Stop(ctx context.Context) error {
 		return nil // 信号在服务起来之前就到了
 	}
 
-	// 自带一个上限，不完全依赖调用方的 ctx：框架给的停止预算是所有组件共享的，
-	// HTTP 服务占满了它，后面的数据库、缓存就没时间关了
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
+	// 在调用方的 ctx 上再收紧一层，而不是换掉它。
+	//
+	// WithTimeout 天然取两者中更早的那个截止时间，于是两条都成立：
+	// 自己不会占满框架给的总预算（后面的数据库、缓存还有时间关），
+	// 也不会超出它——ShutdownTimeout 配得比总预算大时，以总预算为准。
+	// 换成 WithoutCancel 的话后一条就没了：配 25s 而总预算 15s 时，
+	// 这里会实打实地等满 25 秒，所谓「共享预算」是句空话。
+	stopCtx, cancel := context.WithTimeout(ctx, g.conf().ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(stopCtx); err != nil {
@@ -197,9 +225,9 @@ func (g *XGin) Stop(ctx context.Context) error {
 }
 
 // newServer 按配置构建 http.Server
-func (g *XGin) newServer(addr string) *http.Server {
+func (g *XGin) newServer(c Config, addr string) *http.Server {
 	handler := g.engine.Handler()
-	if cfg.UseH2C && !cfg.tlsEnabled() {
+	if c.UseH2C && !c.tlsEnabled() {
 		handler = h2c.NewHandler(handler, &http2.Server{})
 	}
 
@@ -208,10 +236,10 @@ func (g *XGin) newServer(addr string) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
+		ReadHeaderTimeout: c.ReadHeaderTimeout,
+		ReadTimeout:       c.ReadTimeout,
+		WriteTimeout:      c.WriteTimeout,
+		IdleTimeout:       c.IdleTimeout,
 	}
 }
 
