@@ -12,8 +12,9 @@
 package trans
 
 import (
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -54,10 +55,10 @@ func RegisterZH() error {
 
 	v, ok := binding.Validator.Engine().(*validator.Validate)
 	if !ok {
-		return fmt.Errorf("trans: gin validator is %T, not *validator.Validate", binding.Validator.Engine())
+		return xerror.Newf("xgin", "new", "gin validator is %T, not *validator.Validate", binding.Validator.Engine())
 	}
 	if err := zhtrans.RegisterDefaultTranslations(v, t); err != nil {
-		return fmt.Errorf("trans: register zh translations: %w", err)
+		return xerror.Newf("xgin", "new", "register zh translations: %w", err)
 	}
 
 	translator = t

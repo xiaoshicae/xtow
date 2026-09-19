@@ -17,6 +17,8 @@
 package xclient
 
 import (
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"context"
 	"errors"
 	"fmt"
@@ -135,12 +137,12 @@ func Build[C, T any](ctx context.Context, r *Registry[T], cfgs map[string]C,
 	// 名字排序后再建，让失败顺序可复现，日志顺序也稳定
 	for _, name := range sortedKeys(cfgs) {
 		if err := ctx.Err(); err != nil {
-			closeAll(closers)
-			return nil, fmt.Errorf("shutdown signal received before building instance %q: %w", name, err)
+			closeAll(r.module, closers)
+			return nil, xerror.Newf(r.module, "new", "shutdown signal received before building instance %q: %w", name, err)
 		}
-		v, closer, err := safeNew(ctx, name, cfgs[name], new)
+		v, closer, err := safeNew(ctx, r.module, name, cfgs[name], new)
 		if err != nil {
-			closeAll(closers)
+			closeAll(r.module, closers)
 			return nil, err
 		}
 		built[name] = v
@@ -148,10 +150,11 @@ func Build[C, T any](ctx context.Context, r *Registry[T], cfgs map[string]C,
 	}
 
 	r.Publish(built)
-	return &groupCloser{clear: func() { r.Publish(map[string]T{}) }, closers: closers}, nil
+	return &groupCloser{module: r.module, clear: func() { r.Publish(map[string]T{}) }, closers: closers}, nil
 }
 
 type groupCloser struct {
+	module  string
 	clear   func()
 	closers []io.Closer
 }
@@ -159,7 +162,7 @@ type groupCloser struct {
 func (g *groupCloser) Close() error {
 	// 先摘掉再关：反过来的话，关到一半时 C() 还能取到正在被关闭的实例
 	g.clear()
-	return closeAll(g.closers)
+	return closeAll(g.module, g.closers)
 }
 
 // safeNew 建一个实例并隔离 panic。
@@ -167,18 +170,18 @@ func (g *groupCloser) Close() error {
 // 不隔离的话，panic 会穿过 Build 往上抛，而已经建好的那几个实例的 Closer
 // 还只存在于 Build 这一帧的局部变量里——栈一展开就找不回来了，
 // 那是几个再也关不掉的连接池。
-func safeNew[C, T any](ctx context.Context, name string, cfg C,
+func safeNew[C, T any](ctx context.Context, module, name string, cfg C,
 	new func(context.Context, C) (T, io.Closer, error)) (v T, closer io.Closer, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			var zero T
-			v, closer, err = zero, nil, fmt.Errorf("instance %q panicked: %v", name, r)
+			v, closer, err = zero, nil, xerror.Newf(module, "new", "instance %q panicked: %v", name, r)
 		}
 	}()
 
 	v, closer, err = new(ctx, cfg)
 	if err != nil {
-		err = fmt.Errorf("instance %q: %w", name, err)
+		err = xerror.Newf(module, "new", "instance %q: %w", name, err)
 	}
 	return v, closer, err
 }
@@ -187,23 +190,23 @@ func safeNew[C, T any](ctx context.Context, name string, cfg C,
 //
 // 理由与 safeNew 对称：一个实例的 Close 炸了，不该让同一组里
 // 剩下的实例跟着关不掉。
-func safeClose(c io.Closer) (err error) {
+func safeClose(module string, c io.Closer) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("close panicked: %v", r)
+			err = xerror.Newf(module, "close", "close panicked: %v", r)
 		}
 	}()
 	return c.Close()
 }
 
 // closeAll 逆序关闭，一个失败不影响其余
-func closeAll(closers []io.Closer) error {
+func closeAll(module string, closers []io.Closer) error {
 	var errs []error
 	for i := len(closers) - 1; i >= 0; i-- {
 		if closers[i] == nil {
 			continue
 		}
-		if err := safeClose(closers[i]); err != nil {
+		if err := safeClose(module, closers[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}

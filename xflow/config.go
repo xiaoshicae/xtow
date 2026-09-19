@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 )
 
 // ConfigKey 本模块在配置文件里的顶层 key
@@ -51,7 +52,7 @@ func init() {
 		Config: &cfg,
 		Init: func(context.Context) (io.Closer, error) {
 			if err := cfg.validate(); err != nil {
-				return nil, fmt.Errorf("xflow: invalid config: %w", err)
+				return nil, xerror.Newf("xflow", "config", "invalid config: %w", err)
 			}
 			return nil, nil // 没有要关的东西
 		},

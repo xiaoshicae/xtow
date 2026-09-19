@@ -1,8 +1,9 @@
 package xtrace
 
 import (
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"context"
-	"fmt"
 	"maps"
 	"net"
 	"net/http"
@@ -65,7 +66,7 @@ func NewHeaderPropagator(globalHeaders []string, rules []ForwardHeaderRule) (*He
 	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
-		return nil, fmt.Errorf("xtrace: header %s appears in both ForwardHeaders and ForwardHeaderRules; "+
+		return nil, xerror.Newf("xtrace", "config", "header %s appears in both ForwardHeaders and ForwardHeaderRules; "+
 			"the former sends it to every domain, the latter only to the listed ones — remove one of them",
 			strings.Join(conflicts, ", "))
 	}

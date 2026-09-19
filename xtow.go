@@ -17,6 +17,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/internal/config"
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xutil"
 )
 
@@ -43,7 +44,7 @@ func Run(r Runnable, opts ...Option) error {
 	// context，服务当场被切断，后面每个组件的关闭也都在超时状态下跑。
 	// 让它在做任何事之前就失败，好过退出时才发现没有优雅退出这回事
 	if o.stopTimeout <= 0 {
-		return fmt.Errorf("xtow: stop budget must be > 0 (0 is not unlimited, it is no wait at all), got=%v", o.stopTimeout)
+		return xerror.Newf("xtow", "config", "stop budget must be > 0 (0 is not unlimited, it is no wait at all), got=%v", o.stopTimeout)
 	}
 
 	// 退出信号在做任何事之前就接管，配置加载和初始化都在它的保护之内。
@@ -149,7 +150,7 @@ func loadConfigInto(list []registry.Component, o options) error {
 		return nil
 	}
 	if !xutil.FileExist(path) {
-		return fmt.Errorf("xtow: config file does not exist: %s", path)
+		return xerror.Newf("xtow", "config", "config file does not exist: %s", path)
 	}
 
 	o.log().Info("loading config", "file", path)
@@ -179,7 +180,7 @@ func initAll(ctx context.Context, list []registry.Component, o options) ([]named
 		o.log().Info("initializing", "component", c.Key)
 		cl, err := safeInit(ctx, c)
 		if err != nil {
-			return closers, fmt.Errorf("%s init failed: %w", c.Key, err)
+			return closers, xerror.Newf("xtow", "init", "component %s failed: %w", c.Key, err)
 		}
 		if cl != nil {
 			closers = append(closers, named{c.Key, cl})
@@ -217,11 +218,11 @@ func closeWithin(ctx context.Context, n named) error {
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("%s: %w", n.key, err)
+			return xerror.Newf("xtow", "close", "component %s failed: %w", n.key, err)
 		}
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("%s: close did not finish within the stop budget: %w", n.key, ctx.Err())
+		return xerror.Newf("xtow", "close", "component %s did not finish within the stop budget: %w", n.key, ctx.Err())
 	}
 }
 
@@ -232,7 +233,7 @@ func closeWithin(ctx context.Context, n named) error {
 func safeInit(ctx context.Context, c registry.Component) (cl io.Closer, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			cl, err = nil, fmt.Errorf("%s panic: %v", c.Key, r)
+			cl, err = nil, xerror.Newf("xtow", "init", "component %s panicked: %v", c.Key, r)
 		}
 	}()
 	return c.Init(ctx)
@@ -241,7 +242,7 @@ func safeInit(ctx context.Context, c registry.Component) (cl io.Closer, err erro
 func safe(name string, f func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%s panic: %v", name, r)
+			err = xerror.Newf("xtow", "run", "%s panicked: %v", name, r)
 		}
 	}()
 	return f()

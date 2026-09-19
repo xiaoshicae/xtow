@@ -3,7 +3,6 @@ package xmetric
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 )
 
 // Metrics 一份配置装配出来的指标设施。
@@ -202,7 +202,7 @@ func register(reg *prometheus.Registry, c prometheus.Collector) (prometheus.Coll
 	}
 	// 同名不同标签之类的冲突：这个 collector 不在 registry 里，
 	// 通过它记的值永远导不出去
-	return c, fmt.Errorf("xmetric: metric registration failed, values recorded through it will not be exported: %w", err)
+	return c, xerror.Newf("xmetric", "register", "metric registration failed, values recorded through it will not be exported: %w", err)
 }
 
 type noopCloser struct{}
@@ -247,7 +247,7 @@ func RegisterAs[T prometheus.Collector](c T) (T, error) {
 	}
 	typed, ok := registered.(T)
 	if !ok {
-		return c, fmt.Errorf("xmetric: metric name is already registered as %T, values recorded through it will not be exported", registered)
+		return c, xerror.Newf("xmetric", "register", "metric name is already registered as %T, values recorded through it will not be exported", registered)
 	}
 	return typed, nil
 }

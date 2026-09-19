@@ -152,7 +152,7 @@ func (w *rotateWriter) filenameFor(t time.Time) string {
 func (w *rotateWriter) rotateTo(name string) error {
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, w.perm)
 	if err != nil {
-		return xerror.Newf("xlog", "rotate", "open log file failed, file=[%s], err=[%v]", name, err)
+		return xerror.Newf("xlog", "rotate", "open log file failed, file=[%s]: %w", name, err)
 	}
 
 	if w.file != nil {

@@ -96,6 +96,12 @@ mutate "初始化期间收到信号就不启动服务" xtow.go . 'TestRun' <<'PY
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('closers, err := initAll(ctx, list, o)','closers, err := initAll(context.Background(), list, o)'))
 PY
+mutate "出错时问得出是谁报的" xtow.go . 'TestRun' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+old='xerror.Newf("xtow", "init", "component %s failed: %w", c.Key, err)'
+assert old in s, '这条变异要跟着改：初始化失败的包装换地方了'
+open(p,'w',encoding='utf-8').write(s.replace(old, old.replace('%w', '%v')))
+PY
 mutate "建连重试可以被取消" xutil/convert.go . 'TestRetry' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('\tif err := parent.Err(); err != nil {\n\t\treturn err\n\t}\n\n',''))

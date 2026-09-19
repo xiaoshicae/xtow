@@ -13,6 +13,8 @@
 package xflow
 
 import (
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"context"
 	"fmt"
 	"runtime/debug"
@@ -168,7 +170,7 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 	for _, p := range f.steps {
 		// 调用方已经不等了，就不再启动新步骤；但已经做完的仍要回滚
 		if err := ctx.Err(); err != nil {
-			res.Err = fmt.Errorf("xflow: flow %q canceled before step %q: %w", f.name, p.Name(), err)
+			res.Err = xerror.Newf("xflow", "execute", "flow %q canceled before step %q: %w", f.name, p.Name(), err)
 			f.rollback(ctx, data, done, res, m)
 			return res
 		}
@@ -196,11 +198,15 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 			if ctx.Err() == nil {
 				continue
 			}
-			res.Err = fmt.Errorf("xflow: flow %q canceled while running step %q: %w",
+			res.Err = xerror.Newf("xflow", "execute", "flow %q canceled while running step %q: %w",
 				f.name, p.Name(), ctx.Err())
 		} else {
-			// 强依赖失败：这一步没成，不纳入回滚范围
-			res.Err = se
+			// 强依赖失败：这一步没成，不纳入回滚范围。
+			//
+			// 包一层 xerror：不包的话 res.Err 是个裸的 *StepError，
+			// xerror.Is(err, "xflow") 认不出它，而别处的错误都认得出。
+			// 包了之后 errors.As(err, &stepErr) 照样能拿到里面那个
+			res.Err = xerror.New("xflow", "execute", se)
 		}
 
 		f.rollback(ctx, data, done, res, m)
@@ -253,7 +259,7 @@ func (f *Flow[T]) rollback(ctx context.Context, data T, done []Processor[T], res
 func safeProcess[T any](ctx context.Context, p Processor[T], data T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("xflow: step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
+			err = xerror.Newf("xflow", "execute", "step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
 		}
 	}()
 	return p.Process(ctx, data)
@@ -265,7 +271,7 @@ func safeProcess[T any](ctx context.Context, p Processor[T], data T) (err error)
 func safeRollback[T any](ctx context.Context, p Processor[T], data T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("xflow: rollback of step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
+			err = xerror.Newf("xflow", "execute", "rollback of step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
 		}
 	}()
 	return p.Rollback(ctx, data)

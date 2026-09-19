@@ -40,6 +40,46 @@ slog.Info("xgorm ready", "driver", info.Driver, "addr", info.Addr) // 日志用�
 go test -run=NONE -bench=. -benchtime=100000x ./xlog/ ./xflow/ ./xgin/middleware/
 ```
 
+## 错误一律用 xerror
+
+模块对外返回的每一个错误都是 `*xerror.Error`，带上模块名和操作名：
+
+```go
+return xerror.Newf("xgorm", "connect", "cannot reach %s: %w", info.Addr, err)
+return xerror.New("xgorm", "init", err)
+```
+
+调用方因此永远可以问「这是谁报的」：
+
+```go
+xerror.Is(err, "xconfig")   // 整条链里有没有 xconfig 的错误
+xerror.Module(err)          // 最外层是谁报的
+```
+
+四条规矩：
+
+1. **底层错误一律用 `%w`，不用 `%v`。** `%v` 把错误变成一段文本，
+   `errors.Is` / `errors.As` 到此为止 —— 调用方再也判断不了根因是什么。
+2. **一个模块边界一个 xerror，不是一层一个。** 内部的中间错误（比如
+   `Config.validate()` 返回的那些）保持普通 error，由边界那一层包一次。
+   每层都包的话文本会套成
+   `xtow xgin config failed, err=[xtow xgin validate failed, err=[...]]`，
+   信息没多，噪声翻倍。
+3. **消息里不再重复模块名。** 外框已经有了，再写一遍就是
+   `xtow xgorm init failed, err=[xgorm: ...]`。
+4. **op 从这组词里选**，不要每处现编：
+
+   | op | 用在 |
+   |---|---|
+   | `config` | 配置不合法、解码失败 |
+   | `init` | 组件初始化（框架调的那次） |
+   | `new` | 构造实例 |
+   | `connect` | 建连、探测 |
+   | `close` | 关闭、释放 |
+   | `register` | 注册指标、注册方言 |
+   | `start` / `stop` | 服务启停 |
+   | `execute` | 跑一次业务流程（xflow） |
+
 ## 第三方库的默认值一律要量过
 
 这个仓库被外部 review 挑出来的问题里，**大半是同一个毛病**：接了一个库，

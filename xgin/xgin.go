@@ -3,7 +3,6 @@ package xgin
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xgin/middleware"
 	"github.com/xiaoshicae/xtow/xgin/trans"
 	"github.com/xiaoshicae/xtow/xmetric"
@@ -191,7 +191,7 @@ func (g *XGin) conf() Config {
 func (g *XGin) Start(ctx context.Context) error {
 	c := g.conf()
 	if err := c.validate(); err != nil {
-		return fmt.Errorf("xgin: invalid config: %w", err)
+		return xerror.Newf("xgin", "config", "invalid config: %w", err)
 	}
 	// 在这里设而不是在装配里：装配可能发生在配置加载之前，
 	// 那时读到的是默认值，配置里写的 Mode 从此再也不生效
@@ -212,7 +212,7 @@ func (g *XGin) Start(ctx context.Context) error {
 	}
 	if g.srv != nil {
 		g.mu.Unlock()
-		return fmt.Errorf("xgin: server is already running on %s", g.srv.Addr)
+		return xerror.Newf("xgin", "start", "server is already running on %s", g.srv.Addr)
 	}
 	g.srv = srv
 	g.mu.Unlock()
@@ -228,7 +228,7 @@ func (g *XGin) Start(ctx context.Context) error {
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
-	return fmt.Errorf("xgin: listen on %s failed: %w", addr, err)
+	return xerror.Newf("xgin", "start", "listen on %s failed: %w", addr, err)
 }
 
 // Stop 优雅关闭服务。由 xtow.Run 调用。
@@ -262,7 +262,7 @@ func (g *XGin) Stop(ctx context.Context) error {
 		if cerr := srv.Close(); cerr != nil {
 			slog.Warn("xgin force close failed", "error", cerr)
 		}
-		return fmt.Errorf("xgin: graceful shutdown timed out, connections were force closed: %w", err)
+		return xerror.Newf("xgin", "stop", "graceful shutdown timed out, connections were force closed: %w", err)
 	}
 	return nil
 }

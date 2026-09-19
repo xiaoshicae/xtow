@@ -105,6 +105,21 @@ PY_EOF
 $zh"
 echo "✓ 运行期字符串都是英文"
 
+# ---- 9. 错误一律走 xerror ----
+# 模块对外返回的错误都带模块名和操作名，调用方因此能问「这是谁报的」，
+# 而不必去匹配错误消息里的字符串前缀。两种退回旧写法的情况在这里拦下：
+#   1. fmt.Errorf("xgorm: ...")  —— 前缀写进消息，等于没有结构
+#   2. xerror.Newf(..., "...err=[%v]", err) —— %v 把错误变成文本，
+#      errors.Is / errors.As 到此为止，调用方再也判断不了根因
+bad=$(grep -rnE 'fmt\.Errorf\("x[a-z]+: ' --include='*.go' . | grep -v '_test.go' || true)
+[ -z "$bad" ] || fail "这些地方还在用带模块前缀的 fmt.Errorf，应改成 xerror：
+$bad"
+
+bad=$(grep -rn 'xerror.Newf' --include='*.go' . | grep -v '_test.go' | grep 'err=\[%v\]' || true)
+[ -z "$bad" ] || fail "这些 xerror 用 %v 包装底层错误，错误链会断，应改成 %w：
+$bad"
+echo "✓ 错误都走 xerror（%w 保住错误链）"
+
 # ---- 9. 基本卫生 ----
 [ -z "$(gofmt -l .)" ] || fail "有文件未格式化：$(gofmt -l .)"
 for m in $modules; do

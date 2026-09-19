@@ -2,7 +2,6 @@ package xredis
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xclient"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xmetric"
 	"github.com/xiaoshicae/xtow/xutil"
 )
@@ -37,7 +37,7 @@ var pingInterval = time.Second
 // 收到退出信号就该当场放弃，而不是让进程卡在那里。
 func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xredis: invalid config: %w", err)
+		return nil, nil, xerror.Newf("xredis", "config", "invalid config: %w", err)
 	}
 
 	client := redis.NewClient(&redis.Options{
@@ -78,13 +78,13 @@ func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error
 
 	if cfg.Trace {
 		if err := redisotel.InstrumentTracing(client); err != nil {
-			return nil, nil, fmt.Errorf("xredis: install tracing hook: %w", err)
+			return nil, nil, xerror.Newf("xredis", "new", "install tracing hook: %w", err)
 		}
 	}
 
 	if err := ping(ctx, client, cfg); err != nil {
 		// 不带上原始错误的全部内容：go-redis 的认证错误里可能回显配置
-		return nil, nil, fmt.Errorf("xredis: cannot reach %s: %w", cfg.Addr, err)
+		return nil, nil, xerror.Newf("xredis", "connect", "cannot reach %s: %w", cfg.Addr, err)
 	}
 
 	// 日志里只写地址和库号，密码不进日志——所以也就不需要脱敏
@@ -117,7 +117,7 @@ type clientCloser struct {
 
 func (c *clientCloser) Close() error {
 	if err := c.client.Close(); err != nil {
-		return fmt.Errorf("xredis: close %s failed: %w", c.addr, err)
+		return xerror.Newf("xredis", "close", "close %s failed: %w", c.addr, err)
 	}
 	return nil
 }

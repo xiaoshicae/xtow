@@ -8,7 +8,8 @@
 package xtrace
 
 import (
-	"fmt"
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"time"
 )
 
@@ -73,7 +74,7 @@ func DefaultConfig() Config {
 // validate 检查配置本身说不通的地方
 func (c Config) validate() error {
 	if c.ShutdownTimeout <= 0 {
-		return fmt.Errorf("xtrace: invalid config: ShutdownTimeout must be > 0 "+
+		return xerror.Newf("xtrace", "config", "ShutdownTimeout must be > 0 "+
 			"(0 is not unlimited, it is no wait at all, and buffered spans get dropped), got=%v", c.ShutdownTimeout)
 	}
 	return nil

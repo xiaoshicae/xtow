@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 )
 
 // ---- 测试替身：不用 mock，都是普通类型 ----
@@ -605,5 +606,35 @@ func TestShutdown_初始化失败时的关闭也有预算(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "起不来") {
 		t.Errorf("初始化失败的原因该带出来，got=%v", err)
+	}
+}
+
+func TestRun_出错时能问出是谁报的(t *testing.T) {
+	// 统一成 xerror 的全部意义就在这里：调用方拿到一个错误，
+	// 既能问「最终是谁报的」，也能问「链里牵扯到谁」，
+	// 而不必去匹配错误消息里的字符串前缀
+	boom := xerror.Newf("xgorm", "connect", "cannot reach %s: %w", "127.0.0.1:5432", errors.New("connection refused"))
+	r := &recorder{}
+
+	err := Run(newServer(r), WithConfigPath(emptyConf(t)), WithLogger(quietLogger()),
+		withComponents(comp("XGorm", registry.StageClient, r, boom)))
+
+	if err == nil {
+		t.Fatal("初始化失败该返回错误")
+	}
+	// 最外层是框架：是它最终把这个错误交出来的
+	if got := xerror.Module(err); got != "xtow" {
+		t.Errorf("最外层该是 xtow，got=%q", got)
+	}
+	// 但根因仍然问得出来
+	if !xerror.Is(err, "xgorm") {
+		t.Errorf("该能问出根因在 xgorm，err=%v", err)
+	}
+	if xerror.Is(err, "xredis") {
+		t.Errorf("不该认成没参与的模块，err=%v", err)
+	}
+	// 原始错误链也没断
+	if !errors.Is(err, boom) {
+		t.Errorf("原始错误该还在链上，err=%v", err)
 	}
 }

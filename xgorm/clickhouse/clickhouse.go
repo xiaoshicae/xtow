@@ -25,13 +25,13 @@
 package clickhouse
 
 import (
-	"fmt"
 	"net/url"
 	"strings"
 
 	"gorm.io/driver/clickhouse"
 	"gorm.io/gorm"
 
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xgorm"
 )
 
@@ -63,7 +63,7 @@ func resolve(c xgorm.ClientConfig) (string, xgorm.ConnInfo, error) {
 	u, err := url.Parse(c.DSN)
 	if err != nil {
 		// 不回传原始错误：url.Parse 的错误里带着整串 DSN，而错误会被记下来
-		return "", xgorm.ConnInfo{}, fmt.Errorf(
+		return "", xgorm.ConnInfo{}, xerror.Newf("xgorm", "config",
 			"failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)",
 			xgorm.ConfigKey)
 	}
@@ -73,7 +73,7 @@ func resolve(c xgorm.ClientConfig) (string, xgorm.ConnInfo, error) {
 	// 回写之后 DSN 里就没有密码了——服务报「认证失败」，而配置文件里密码明明写着。
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return "", xgorm.ConnInfo{}, fmt.Errorf(
+		return "", xgorm.ConnInfo{}, xerror.Newf("xgorm", "config",
 			"failed to parse the query part of the DSN, check the format of %s "+
 				"(a literal %% in a password must be written as %%25; details omitted to keep credentials out of logs)",
 			xgorm.ConfigKey)

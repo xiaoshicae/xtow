@@ -79,7 +79,7 @@ func handlerFor(format string) (func(io.Writer, *slog.HandlerOptions) slog.Handl
 func newFileWriter(c FileConfig) (io.WriteCloser, error) {
 	if c.Path != "" {
 		if err := os.MkdirAll(c.Path, 0o755); err != nil {
-			return nil, xerror.Newf("xlog", "new", "create log dir failed Path=[%s], err=[%v]", c.Path, err)
+			return nil, xerror.Newf("xlog", "new", "create log dir failed Path=[%s]: %w", c.Path, err)
 		}
 	}
 	perm, err := parsePerm(c.Perm)
@@ -115,7 +115,7 @@ func parsePerm(s string) (os.FileMode, error) {
 	v, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
 		return 0, xerror.Newf("xlog", "new",
-			"malformed log file permission Perm=[%s], expected an octal string such as \"0644\"", s)
+			"malformed log file permission Perm=[%s], expected an octal string such as \"0644\": %w", s, err)
 	}
 	return os.FileMode(v), nil
 }

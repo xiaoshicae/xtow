@@ -3,7 +3,6 @@ package xgorm
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xclient"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xmetric"
 	"github.com/xiaoshicae/xtow/xutil"
 )
@@ -38,12 +38,12 @@ var pingInterval = time.Second
 // gorm.Open 在自动 ping 失败时不关它自己建的池子，那会漏一个常驻协程。
 func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xgorm: invalid config: %w", err)
+		return nil, nil, xerror.Newf("xgorm", "config", "invalid config: %w", err)
 	}
 
 	dsn, info, err := resolveDSN(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("xgorm: %w", err)
+		return nil, nil, xerror.New("xgorm", "config", err)
 	}
 
 	// 关掉 GORM 自带的那次 ping：它用的是自己的 context，我们的退出信号
@@ -75,7 +75,7 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 
 	dialect, known := lookupDialect(cfg.Driver)
 	if !known {
-		return nil, nil, fmt.Errorf("xgorm: %w", unknownDriver(cfg.Driver))
+		return nil, nil, unknownDriver(cfg.Driver)
 	}
 
 	db, err := gorm.Open(dialect.Open(dsn), gormCfg)
@@ -84,7 +84,7 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 		// 仍然兜一次底：万一它已经建了池子，不关就漏一个常驻协程，
 		// 而 *sql.DB 允许重复 Close，代价只是一次空调用
 		closePool(db)
-		return nil, nil, fmt.Errorf("xgorm: open %s failed: %w", info.Addr, err)
+		return nil, nil, xerror.Newf("xgorm", "connect", "open %s failed: %w", info.Addr, err)
 	}
 
 	// 从这里往后的每一步都是我们自己的，失败了没人替我们收拾：
@@ -98,7 +98,7 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 
 	pool, err := db.DB()
 	if err != nil {
-		return nil, nil, fmt.Errorf("xgorm: get underlying pool: %w", err)
+		return nil, nil, xerror.Newf("xgorm", "connect", "get underlying pool: %w", err)
 	}
 	pool.SetMaxOpenConns(cfg.MaxOpenConns)
 	pool.SetMaxIdleConns(cfg.MaxIdleConns)
@@ -106,12 +106,12 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	pool.SetConnMaxIdleTime(cfg.MaxIdleTime)
 
 	if err := ping(ctx, pool, cfg); err != nil {
-		return nil, nil, fmt.Errorf("xgorm: cannot reach %s: %w", info.Addr, err)
+		return nil, nil, xerror.Newf("xgorm", "connect", "cannot reach %s: %w", info.Addr, err)
 	}
 
 	if cfg.Trace {
 		if err := installTracing(db, info); err != nil {
-			return nil, nil, fmt.Errorf("xgorm: install tracing callbacks: %w", err)
+			return nil, nil, xerror.Newf("xgorm", "new", "install tracing callbacks: %w", err)
 		}
 	}
 
@@ -162,7 +162,7 @@ type poolCloser struct {
 
 func (c *poolCloser) Close() error {
 	if err := c.pool.Close(); err != nil {
-		return fmt.Errorf("xgorm: close %s failed: %w", c.info.Addr, err)
+		return xerror.Newf("xgorm", "close", "close %s failed: %w", c.info.Addr, err)
 	}
 	return nil
 }

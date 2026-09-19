@@ -18,7 +18,11 @@ type Error struct {
 func (e *Error) Error() string {
 	var b strings.Builder
 	b.Grow(32 + len(e.Module) + len(e.Op))
-	b.WriteString("xtow ")
+	// 框架自己报的错模块名就是 xtow，再加一次前缀就成了「xtow xtow init failed」。
+	// 前缀的作用是让这条错误落进别人的日志时看得出是谁报的，这一种已经看得出了
+	if e.Module != "xtow" {
+		b.WriteString("xtow ")
+	}
 	b.WriteString(e.Module)
 	b.WriteByte(' ')
 	b.WriteString(e.Op)

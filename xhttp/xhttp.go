@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/xiaoshicae/xtow/registry"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xmetric"
 	"github.com/xiaoshicae/xtow/xtrace"
 )
@@ -36,7 +37,7 @@ const fallbackTimeout = 30 * time.Second
 // 返回的 io.Closer 释放连接池里的空闲连接。
 func New(cfg Config) (*resty.Client, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xhttp: invalid config: %w", err)
+		return nil, nil, xerror.Newf("xhttp", "config", "invalid config: %w", err)
 	}
 
 	// 自己抓住连接池那一层，不指望 http.Client.CloseIdleConnections 找得到它。
@@ -64,7 +65,7 @@ func New(cfg Config) (*resty.Client, io.Closer, error) {
 		// 记到新建的那个上会永远导不出去
 		hist, err := xmetric.RegisterAs(newDurationHistogram())
 		if err != nil {
-			return nil, nil, fmt.Errorf("xhttp: %w", err)
+			return nil, nil, xerror.New("xhttp", "register", err)
 		}
 		installMetrics(client, hist)
 	}

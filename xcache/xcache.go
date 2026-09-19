@@ -2,7 +2,6 @@ package xcache
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xclient"
+	"github.com/xiaoshicae/xtow/xerror"
 )
 
 // Cache 就是原生的 ristretto 缓存，这里只是给它起个短名字。
@@ -22,7 +22,7 @@ type Cache = ristretto.Cache[string, any]
 // New 按配置建一个缓存实例，不触碰任何全局变量
 func New(cfg ClientConfig) (*Cache, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xcache: invalid config: %w", err)
+		return nil, nil, xerror.Newf("xcache", "config", "invalid config: %w", err)
 	}
 
 	c, err := ristretto.NewCache(&ristretto.Config[string, any]{
@@ -36,7 +36,7 @@ func New(cfg ClientConfig) (*Cache, io.Closer, error) {
 		IgnoreInternalCost: true,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("xcache: create cache: %w", err)
+		return nil, nil, xerror.Newf("xcache", "new", "create cache: %w", err)
 	}
 	return c, closerFunc(c.Close), nil
 }

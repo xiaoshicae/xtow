@@ -58,3 +58,14 @@ func TestNewf(t *testing.T) {
 		t.Errorf("Newf 应格式化消息，got=%q", e.Error())
 	}
 }
+
+func TestErrorMessage_框架自己的错不重复前缀(t *testing.T) {
+	// 前缀的作用是让错误落进别人的日志时看得出是谁报的。
+	// 模块名本来就是 xtow 的那种，再加一次就成了「xtow xtow init failed」
+	if got := New("xtow", "init", errBase).Error(); strings.HasPrefix(got, "xtow xtow") {
+		t.Errorf("前缀重复了：%s", got)
+	}
+	if got := New("xgorm", "init", errBase).Error(); !strings.HasPrefix(got, "xtow xgorm") {
+		t.Errorf("其它模块该带前缀：%s", got)
+	}
+}

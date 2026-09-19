@@ -2,7 +2,6 @@ package xtrace
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xapp"
+	"github.com/xiaoshicae/xtow/xerror"
 	"github.com/xiaoshicae/xtow/xlog"
 )
 
@@ -83,7 +83,7 @@ func New(ctx context.Context, cfg Config, procs ...sdktrace.SpanProcessor) (*Tra
 	if cfg.Console {
 		exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 		if err != nil {
-			return nil, nil, fmt.Errorf("xtrace: create stdout exporter: %w", err)
+			return nil, nil, xerror.Newf("xtrace", "new", "create stdout exporter: %w", err)
 		}
 		// Simple 而非 Batch：本地调试要的是立刻看见，不是攒够了再刷
 		opts = append(opts, sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exp)))
@@ -129,7 +129,7 @@ func newResource(ctx context.Context) (*resource.Resource, error) {
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("xtrace: build resource: %w", err)
+		return nil, xerror.Newf("xtrace", "new", "build resource: %w", err)
 	}
 	return res, nil
 }
@@ -170,7 +170,7 @@ func (c *providerCloser) Close() error {
 
 	detach(c.tp)
 	if err := c.tp.Shutdown(ctx); err != nil {
-		return fmt.Errorf("xtrace: shutdown: %w", err)
+		return xerror.Newf("xtrace", "close", "shutdown: %w", err)
 	}
 	return nil
 }

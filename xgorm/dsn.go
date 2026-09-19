@@ -1,7 +1,8 @@
 package xgorm
 
 import (
-	"fmt"
+	"github.com/xiaoshicae/xtow/xerror"
+
 	"log/slog"
 	"maps"
 	"math"
@@ -46,7 +47,7 @@ func resolveDSN(c ClientConfig) (string, ConnInfo, error) {
 // 只说「不认识」帮助有限：驱动名写错和忘了 import 对应的模块是两个不同的
 // 问题，把实际注册了哪些列出来，两者一眼可分
 func unknownDriver(name Driver) error {
-	return fmt.Errorf("unknown Driver=%q, registered: %v "+
+	return xerror.Newf("xgorm", "config", "unknown Driver=%q, registered: %v "+
 		"(drivers other than mysql / postgres live in their own module, import it to register)",
 		name, registeredDrivers())
 }
@@ -60,7 +61,7 @@ func resolveMySQL(c ClientConfig) (string, ConnInfo, error) {
 	cfg, err := mysqldriver.ParseDSN(c.DSN)
 	if err != nil {
 		// 不回传驱动的错误：它会把 DSN 片段带在错误信息里，而错误信息会被记下来
-		return "", ConnInfo{}, fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
+		return "", ConnInfo{}, xerror.Newf("xgorm", "config", "failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
 
 	if cfg.Timeout == 0 {
@@ -127,7 +128,7 @@ func injectPostgresURL(dsn string, injects map[string]string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		// 同样不回传原始错误：url.Parse 的错误里带着整串 DSN
-		return "", fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
+		return "", xerror.Newf("xgorm", "config", "failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
 	// 显式 ParseQuery 而不是 u.Query()：后者会把错误吞掉，只返回解得出的那部分。
 	// 于是密码里带一个字面 % （构成非法的百分号转义）时，那一项会被静默丢掉，
@@ -135,7 +136,7 @@ func injectPostgresURL(dsn string, injects map[string]string) (string, error) {
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		// 同样不回传原始错误：它带着出问题的那个片段，而那多半就是凭证
-		return "", fmt.Errorf("failed to parse the query part of the DSN, check the format of %s "+
+		return "", xerror.Newf("xgorm", "config", "failed to parse the query part of the DSN, check the format of %s "+
 			"(a literal %% in a password must be written as %%25; details omitted to keep credentials out of logs)",
 			ConfigKey)
 	}

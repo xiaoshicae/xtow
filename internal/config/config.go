@@ -4,7 +4,7 @@
 package config
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xconfig"
+	"github.com/xiaoshicae/xtow/xerror"
 )
 
 var placeholder = regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
@@ -24,18 +25,18 @@ var placeholder = regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
 func Load(path string, list []registry.Component) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read config %s: %w", path, err)
+		return xerror.Newf("xconfig", "config", "read config %s: %w", path, err)
 	}
 
 	var root yaml.Node
 	if err := yaml.Unmarshal(raw, &root); err != nil {
-		return fmt.Errorf("parse config %s: %w", path, err)
+		return xerror.Newf("xconfig", "config", "parse config %s: %w", path, err)
 	}
 
 	var missing []string
 	expand(&root, &missing)
 	if len(missing) > 0 {
-		return fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+		return xerror.Newf("xconfig", "config", "environment variables not set: %s", strings.Join(missing, ", "))
 	}
 
 	sections, err := topLevel(&root)
@@ -54,14 +55,14 @@ func Load(path string, list []registry.Component) error {
 			continue // 没配这一块，或者写了个空块，都保持默认值
 		}
 		if err := decodeStrict(node, c.Config); err != nil {
-			return fmt.Errorf("invalid config %s: %w", c.Key, err)
+			return xerror.Newf("xconfig", "config", "invalid config %s: %w", c.Key, err)
 		}
 	}
 
 	// 没有任何组件认领的顶层 key —— 多半是拼错了，或者忘了 import 对应的 contrib
 	for key := range sections {
 		if !claimed[key] {
-			return fmt.Errorf("config key %q is not claimed by any component: check the spelling, or whether the matching contrib package is imported", key)
+			return xerror.Newf("xconfig", "config", "config key %q is not claimed by any component: check the spelling, or whether the matching contrib package is imported", key)
 		}
 	}
 	return nil
@@ -75,7 +76,7 @@ func topLevel(root *yaml.Node) (map[string]*yaml.Node, error) {
 	}
 	doc := root.Content[0]
 	if doc.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("top level of the config file must be a mapping")
+		return nil, xerror.New("xconfig", "config", errors.New("top level of the config file must be a mapping"))
 	}
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key := doc.Content[i]
@@ -83,7 +84,7 @@ func topLevel(root *yaml.Node) (map[string]*yaml.Node, error) {
 		// 后面的严格解码再也看不见它——于是同一个块写两遍能正常加载，
 		// 静默地以后一份为准，而写的人多半以为两份都生效了
 		if prev, dup := lines[key.Value]; dup {
-			return nil, fmt.Errorf("duplicate top-level key %q at line %d (first seen at line %d)",
+			return nil, xerror.Newf("xconfig", "config", "duplicate top-level key %q at line %d (first seen at line %d)",
 				key.Value, key.Line, prev)
 		}
 		lines[key.Value] = key.Line
