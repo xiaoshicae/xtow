@@ -348,3 +348,23 @@ func settleTo(target int) int {
 	}
 	return runtime.NumGoroutine()
 }
+
+func TestNew_ctx已取消时首次建连也当场放弃(t *testing.T) {
+	// GORM 自带的那次 ping 用的是它自己的 context，我们的退出信号管不到。
+	// 开着的话，连一个不可达地址时这里会先干等满 DSN 的 connect_timeout
+	c := DefaultClientConfig()
+	c.DSN = "postgres://u:p@10.255.255.1:5432/db" // 黑洞地址，连接会一直挂着
+	c.DialTimeout = 3 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	_, _, err := New(ctx, c)
+	if err == nil {
+		t.Fatal("ctx 已取消时不该建连成功")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("该当场放弃，实际等了 %v（说明首次建连没走我们的 ctx）", elapsed)
+	}
+}

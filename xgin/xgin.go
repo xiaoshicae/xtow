@@ -219,7 +219,16 @@ func (g *XGin) Stop(ctx context.Context) error {
 	defer cancel()
 
 	if err := srv.Shutdown(stopCtx); err != nil {
-		return fmt.Errorf("xgin: graceful shutdown failed: %w", err)
+		// 到点了还有请求没做完。Shutdown 只是返回错误，它不动那些连接——
+		// 就这么走的话，handler 还在跑，而框架紧接着就去关数据库和缓存了，
+		// 那些请求会摸到已经关掉的连接池。
+		//
+		// 所以这里补一刀 Close()：强行断掉所有连接。在途请求会失败，
+		// 但那本来就是超时的含义，好过让它们带着半个坏掉的进程继续跑。
+		if cerr := srv.Close(); cerr != nil {
+			slog.Warn("xgin force close failed", "error", cerr)
+		}
+		return fmt.Errorf("xgin: graceful shutdown timed out, connections were force closed: %w", err)
 	}
 	return nil
 }

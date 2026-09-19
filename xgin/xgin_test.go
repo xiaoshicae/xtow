@@ -336,6 +336,13 @@ func TestStop_没启动过也安全(t *testing.T) {
 // servingWithHungRequest 起一个服务，并让一个请求挂在 handler 里不返回，
 // 这样 Shutdown 必须等它 —— 才测得出等多久
 func servingWithHungRequest(t *testing.T) *XGin {
+	g, _ := servingWithHungRequestDone(t)
+	return g
+}
+
+// servingWithHungRequestDone 同上，另外返回一个在「那个挂住的请求结束时」
+// 关闭的 channel —— 强制断连有没有生效，只有它看得出来
+func servingWithHungRequestDone(t *testing.T) (*XGin, <-chan struct{}) {
 	t.Helper()
 	port := freePort(t)
 	withConfig(t, func(c *Config) { c.Host, c.Port = "127.0.0.1", port })
@@ -360,7 +367,7 @@ func servingWithHungRequest(t *testing.T) *XGin {
 	}()
 	// 等这个请求真的到了 handler 里，否则 Shutdown 可能在它之前就走完了
 	time.Sleep(100 * time.Millisecond)
-	return g
+	return g, hung
 }
 
 func TestStop_不超过调用方给的截止时间(t *testing.T) {
@@ -594,5 +601,25 @@ func TestConf_配置在用的时候才读(t *testing.T) {
 
 	if got := g.conf().Port; got != 2 {
 		t.Errorf("该读到 New 之后才加载进来的配置，got=%d", got)
+	}
+}
+
+func TestStop_超时后强制断掉在途连接(t *testing.T) {
+	// Shutdown 超时只返回错误，它不动那些连接。就这么走的话 handler 还在跑，
+	// 而框架紧接着就去关数据库和缓存了——那些请求会摸到已经关掉的连接池。
+	//
+	// 只看端口连不连得上是测不出来的：Shutdown 一进去就把监听关了，
+	// 连不上是两种情况共有的表现。要看的是那个在途请求有没有被断掉。
+	g, hung := servingWithHungRequestDone(t)
+	withConfig(t, func(c *Config) { c.ShutdownTimeout = 200 * time.Millisecond })
+
+	if err := g.Stop(context.Background()); err == nil {
+		t.Fatal("在途请求没做完就到点了，该报错")
+	}
+
+	select {
+	case <-hung:
+	case <-time.After(2 * time.Second):
+		t.Error("超时之后在途请求仍在继续——框架接着就去关数据库了，它会摸到已关闭的连接池")
 	}
 }

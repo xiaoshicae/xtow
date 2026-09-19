@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log/slog"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -42,7 +43,7 @@ func Metric() gin.HandlerFunc {
 			if route == "" {
 				route = "unmatched"
 			}
-			method, status := c.Request.Method, strconv.Itoa(c.Writer.Status())
+			method, status := normalizeMethod(c.Request.Method), strconv.Itoa(c.Writer.Status())
 
 			total.WithLabelValues(method, route, status).Inc()
 			// 用秒而不是毫秒：毫秒取整会把 0.4ms 的请求记成 0
@@ -51,6 +52,29 @@ func Metric() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// knownMethods RFC 9110 定的那几个方法，加上 PATCH
+var knownMethods = map[string]struct{}{
+	http.MethodGet: {}, http.MethodHead: {}, http.MethodPost: {}, http.MethodPut: {},
+	http.MethodPatch: {}, http.MethodDelete: {}, http.MethodConnect: {},
+	http.MethodOptions: {}, http.MethodTrace: {},
+}
+
+// methodOther 不认识的方法统一记成这个
+const methodOther = "OTHER"
+
+// normalizeMethod 把方法收敛到一个固定集合。
+//
+// 路由已经用模板挡住了 URL 里的 id，方法这一维却是照抄请求的——而 HTTP 的
+// 方法是一个自由 token，谁都可以发 CUSTOM1、CUSTOM2。每来一个新值就多一组
+// 时间序列，没有淘汰机制：指标内存、抓取响应、监控存储一起涨。
+// 就算最后返回 404 / 405 也已经记进去了。
+func normalizeMethod(m string) string {
+	if _, ok := knownMethods[m]; ok {
+		return m
+	}
+	return methodOther
 }
 
 // newCollectors 建并注册两个指标。重复注册由 xmetric.Register 处理——

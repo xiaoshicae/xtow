@@ -200,3 +200,57 @@ func TestBuild_收到退出信号就不再建剩下的实例(t *testing.T) {
 		t.Errorf("中途失败不该把半成品发布出去，got=%v", r.Names())
 	}
 }
+
+func TestBuild_建实例时panic不漏掉已经建好的(t *testing.T) {
+	// panic 穿过 Build 往上抛的话，已经建好的那几个实例的 Closer
+	// 只存在于 Build 这一帧的局部变量里，栈一展开就找不回来了
+	r := NewRegistry[string]("xdemo", "XDemo")
+	var closed []string
+
+	_, err := Build(context.Background(), r, map[string]string{"a": "A", "b": "B"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
+			if c == "B" {
+				panic("建 B 的时候炸了")
+			}
+			return c, &recordCloser{name: c, closed: &closed}, nil
+		})
+
+	if err == nil {
+		t.Fatal("panic 应当变成一个普通的错误")
+	}
+	if !strings.Contains(err.Error(), "panicked") || !strings.Contains(err.Error(), `"b"`) {
+		t.Errorf("错误该说清楚是哪个实例炸了，got=%v", err)
+	}
+	if len(closed) != 1 || closed[0] != "A" {
+		t.Errorf("已经建好的要被关掉，否则漏一个连接池，got=%v", closed)
+	}
+}
+
+// panicCloser 关的时候炸
+type panicCloser struct{}
+
+func (panicCloser) Close() error { panic("关的时候炸了") }
+
+func TestBuild_一个实例关闭时panic不拦住其余(t *testing.T) {
+	r := NewRegistry[string]("xdemo", "XDemo")
+	var closed []string
+
+	closer, err := Build(context.Background(), r, map[string]string{"a": "A", "b": "B"},
+		func(_ context.Context, c string) (string, io.Closer, error) {
+			if c == "B" {
+				return c, panicCloser{}, nil
+			}
+			return c, &recordCloser{name: c, closed: &closed}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cerr := closer.Close()
+	if cerr == nil || !strings.Contains(cerr.Error(), "panicked") {
+		t.Errorf("panic 该变成一个普通的关闭错误，got=%v", cerr)
+	}
+	if len(closed) != 1 || closed[0] != "A" {
+		t.Errorf("一个炸了不该拦住其余实例，got=%v", closed)
+	}
+}

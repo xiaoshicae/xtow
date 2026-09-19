@@ -193,3 +193,18 @@ func TestMetric_panic穿过时仍计入(t *testing.T) {
 }
 
 var _ = http.StatusOK
+
+func TestMetric_自定义方法收敛成OTHER(t *testing.T) {
+	// 路由已经用模板挡住了 URL 里的 id，方法这一维却是照抄请求的——
+	// 而 HTTP 方法是个自由 token，谁都能发 CUSTOM1、CUSTOM2，
+	// 每来一个新值就多一组时间序列，没有淘汰机制
+	for _, c := range []struct{ in, want string }{
+		{"GET", "GET"}, {"POST", "POST"}, {"PATCH", "PATCH"}, {"DELETE", "DELETE"},
+		{"CONNECT", "CONNECT"}, {"OPTIONS", "OPTIONS"}, {"TRACE", "TRACE"}, {"HEAD", "HEAD"},
+		{"CUSTOM1", "OTHER"}, {"FOOBAR", "OTHER"}, {"get", "OTHER"}, {"", "OTHER"},
+	} {
+		if got := normalizeMethod(c.in); got != c.want {
+			t.Errorf("normalizeMethod(%q)=%q want %q", c.in, got, c.want)
+		}
+	}
+}

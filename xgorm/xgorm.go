@@ -45,7 +45,12 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 		return nil, nil, fmt.Errorf("xgorm: %w", err)
 	}
 
-	gormCfg := &gorm.Config{}
+	// 关掉 GORM 自带的那次 ping：它用的是自己的 context，我们的退出信号
+	// 和重试都管不到它。开着的话，连一个不可达的地址时 New 会先在里面
+	// 干等满 DSN 的 connect_timeout，哪怕 ctx 早就被取消了（实测 3 秒）。
+	// 关掉之后 gorm.Open 只做装配、立刻返回，全部建连都走下面那次
+	// ctx-aware 的 ping —— 取消得了、也重试得了。
+	gormCfg := &gorm.Config{DisableAutomaticPing: true}
 	if cfg.Log {
 		gormCfg.Logger = newGormLogger(cfg)
 	}
@@ -57,11 +62,11 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 
 	db, err := gorm.Open(dialect.Open(dsn), gormCfg)
 	if err != nil {
-		// gorm 自己会在 Initialize 和自动 ping 失败时关掉池子（v1.31 起），
-		// 这里再关一次是兜底：*sql.DB 允许重复 Close，代价是一次空调用，
-		// 而万一哪个版本不关，漏的是一个再也不会退出的常驻协程
+		// 关掉自动 ping 之后这一步只做装配，失败多半是 DSN 本身有问题。
+		// 仍然兜一次底：万一它已经建了池子，不关就漏一个常驻协程，
+		// 而 *sql.DB 允许重复 Close，代价只是一次空调用
 		closePool(db)
-		return nil, nil, fmt.Errorf("xgorm: connect to %s failed: %w", info.Addr, err)
+		return nil, nil, fmt.Errorf("xgorm: open %s failed: %w", info.Addr, err)
 	}
 
 	// 从这里往后的每一步都是我们自己的，失败了没人替我们收拾：

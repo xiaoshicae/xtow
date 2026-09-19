@@ -138,10 +138,10 @@ func Build[C, T any](ctx context.Context, r *Registry[T], cfgs map[string]C,
 			closeAll(closers)
 			return nil, fmt.Errorf("shutdown signal received before building instance %q: %w", name, err)
 		}
-		v, closer, err := new(ctx, cfgs[name])
+		v, closer, err := safeNew(ctx, name, cfgs[name], new)
 		if err != nil {
 			closeAll(closers)
-			return nil, fmt.Errorf("instance %q: %w", name, err)
+			return nil, err
 		}
 		built[name] = v
 		closers = append(closers, closer)
@@ -162,6 +162,40 @@ func (g *groupCloser) Close() error {
 	return closeAll(g.closers)
 }
 
+// safeNew 建一个实例并隔离 panic。
+//
+// 不隔离的话，panic 会穿过 Build 往上抛，而已经建好的那几个实例的 Closer
+// 还只存在于 Build 这一帧的局部变量里——栈一展开就找不回来了，
+// 那是几个再也关不掉的连接池。
+func safeNew[C, T any](ctx context.Context, name string, cfg C,
+	new func(context.Context, C) (T, io.Closer, error)) (v T, closer io.Closer, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			var zero T
+			v, closer, err = zero, nil, fmt.Errorf("instance %q panicked: %v", name, r)
+		}
+	}()
+
+	v, closer, err = new(ctx, cfg)
+	if err != nil {
+		err = fmt.Errorf("instance %q: %w", name, err)
+	}
+	return v, closer, err
+}
+
+// safeClose 关一个实例并隔离 panic。
+//
+// 理由与 safeNew 对称：一个实例的 Close 炸了，不该让同一组里
+// 剩下的实例跟着关不掉。
+func safeClose(c io.Closer) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("close panicked: %v", r)
+		}
+	}()
+	return c.Close()
+}
+
 // closeAll 逆序关闭，一个失败不影响其余
 func closeAll(closers []io.Closer) error {
 	var errs []error
@@ -169,7 +203,7 @@ func closeAll(closers []io.Closer) error {
 		if closers[i] == nil {
 			continue
 		}
-		if err := closers[i].Close(); err != nil {
+		if err := safeClose(closers[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}

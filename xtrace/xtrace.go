@@ -194,11 +194,26 @@ type Transport struct {
 // RoundTrip 实现 http.RoundTripper。
 // 按约定不修改入参请求：WithContext 返回的是浅拷贝。
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	next := t.Next
-	if next == nil {
-		next = http.DefaultTransport
+	return t.next().RoundTrip(req.WithContext(WithTargetHost(req.Context(), req.URL.Host)))
+}
+
+// CloseIdleConnections 把关闭空闲连接的请求转给底层 transport。
+//
+// 必须有这个方法。http.Client.CloseIdleConnections() 是靠类型断言找它的，
+// 包一层却不转发，断言就不成立，整个调用变成一次空操作——
+// 而链路默认是开着的，也就是默认情况下退出时那些空闲连接根本没被清掉。
+func (t *Transport) CloseIdleConnections() {
+	if c, ok := t.next().(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
 	}
-	return next.RoundTrip(req.WithContext(WithTargetHost(req.Context(), req.URL.Host)))
+}
+
+// next 实际执行请求的 RoundTripper
+func (t *Transport) next() http.RoundTripper {
+	if t.Next == nil {
+		return http.DefaultTransport
+	}
+	return t.Next
 }
 
 // ---- 登记 ----

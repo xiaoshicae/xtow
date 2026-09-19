@@ -230,6 +230,9 @@ XGin:
   WriteTimeout: 0s         # 默认不限制：限制它会打断 SSE、长轮询、大文件下载
   IdleTimeout: 60s
   ShutdownTimeout: 10s     # HTTP 服务能占的那一份，必须 > 0
+                           # 到点仍有在途请求时会强制断连：Shutdown 只返回错误、
+                           # 不动那些连接，不补这一刀的话 handler 会在框架关掉
+                           # 数据库之后继续访问它
                            # 整个退出流程的总预算是 xtow.WithStopTimeout（默认 15s），
                            # 两者取更早的那个截止时间，所以这项配得比总预算大没有意义
 ```
