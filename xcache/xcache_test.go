@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -291,5 +292,36 @@ func TestInitAll_没配就什么都不做(t *testing.T) {
 	closer.Close()
 	if len(Names()) != 0 {
 		t.Errorf("不该建出实例，got=%v", Names())
+	}
+}
+
+func TestNew_MaxCost就是能存多少条(t *testing.T) {
+	// ristretto 默认把每条 56 字节的内部开销加进 cost，于是 cost=1 的写入
+	// 实际占 57。不关掉的话 MaxCost=2000 只能存下三十几条，
+	// 配置里写的数字和实际容量差着五十多倍，而且没有任何地方会提到
+	c := DefaultClientConfig()
+	c.MaxCost = 2000
+	c.NumCounters = 20000
+	cache, closer, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	const n = 2000
+	for i := range n {
+		cache.SetWithTTL(strconv.Itoa(i), i, 1, time.Hour)
+	}
+	cache.Wait()
+
+	live := 0
+	for i := range n {
+		if _, ok := cache.Get(strconv.Itoa(i)); ok {
+			live++
+		}
+	}
+	// 准入策略本来就会丢掉一部分，这里只要求同一个量级
+	if live < n/2 {
+		t.Errorf("MaxCost=%d、每条 cost=1，应该能装下接近 %d 条，实际只剩 %d 条", c.MaxCost, n, live)
 	}
 }

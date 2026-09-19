@@ -1,9 +1,15 @@
 package xgorm
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
+	"log"
 	"net"
 	"os"
 	"runtime"
@@ -368,3 +374,50 @@ func TestNew_ctx已取消时首次建连也当场放弃(t *testing.T) {
 		t.Errorf("该当场放弃，实际等了 %v（说明首次建连没走我们的 ctx）", elapsed)
 	}
 }
+
+func TestNew_Log关掉时SQL错误不会漏到标准输出(t *testing.T) {
+	// 不给 gormCfg.Logger 的话，gorm.Open 会补上 logger.Default，
+	// 而那个默认实现是「带 ANSI 颜色地往 os.Stdout 写」：
+	// 慢 SQL 和执行错误照样打，只是绕开了 slog——没有级别、没有 TraceID、
+	// 不是 JSON，一行彩色文本直接插进日志流里。
+	// Log=false 要的是不打，不是换个地方打
+	var leaked bytes.Buffer
+	old := logger.Default
+	logger.Default = logger.New(log.New(&leaked, "", 0), logger.Config{LogLevel: logger.Info})
+	t.Cleanup(func() { logger.Default = old })
+
+	sentinel := errors.New("stub dialector was used")
+	withDialect(t, Dialect{
+		Name: "logprobe",
+		Open: func(string) gorm.Dialector {
+			return loggingDialector{err: sentinel}
+		},
+	})
+
+	c := DefaultClientConfig()
+	c.Driver, c.DSN, c.Log = "logprobe", "logprobe://h:1/d", false
+	if _, _, err := New(context.Background(), c); !errors.Is(err, sentinel) {
+		t.Fatalf("应该用注册进来的 Open，got=%v", err)
+	}
+	if leaked.Len() > 0 {
+		t.Errorf("Log=false 时 GORM 不该往它自己的默认输出写，实际写了: %q", leaked.String())
+	}
+}
+
+// loggingDialector 在 Initialize 里用 GORM 解出来的那个 Logger 写一条，
+// 借此看清 Log=false 时最终生效的到底是谁
+type loggingDialector struct{ err error }
+
+func (d loggingDialector) Initialize(db *gorm.DB) error {
+	db.Logger.Error(context.Background(), "probe: a query failed")
+	return d.err
+}
+func (d loggingDialector) Name() string                    { return "logprobe" }
+func (d loggingDialector) Migrator(*gorm.DB) gorm.Migrator { return nil }
+func (d loggingDialector) DataTypeOf(*schema.Field) string { return "" }
+func (d loggingDialector) DefaultValueOf(*schema.Field) clause.Expression {
+	return clause.Expr{}
+}
+func (d loggingDialector) BindVarTo(clause.Writer, *gorm.Statement, any) {}
+func (d loggingDialector) QuoteTo(clause.Writer, string)                 {}
+func (d loggingDialector) Explain(sql string, _ ...any) string           { return sql }

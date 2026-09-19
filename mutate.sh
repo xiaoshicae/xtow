@@ -14,7 +14,18 @@ set -e
 [ -z "$(git status --porcelain)" ] || { echo "✗ 工作区不干净，先提交或暂存"; exit 1; }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; git checkout -- . 2>/dev/null || true' EXIT
+
+# 只还原自己动过的那几个文件。原来这里写的是 git checkout -- .，
+# 那等于「脚本被打断时把整个工作区清空」——前置检查保证了开跑时是干净的，
+# 但脚本自己不该持有这种权力，何况被 kill 时 trap 根本不一定跑得到
+restore() {
+  [ -f "$TMP/touched" ] || return 0
+  while IFS= read -r f; do
+    [ -f "$TMP/bak/$(echo "$f" | tr / _)" ] && cp "$TMP/bak/$(echo "$f" | tr / _)" "$f"
+  done < "$TMP/touched"
+}
+trap 'restore; rm -rf "$TMP"' EXIT INT TERM
+mkdir -p "$TMP/bak"
 
 total=0
 survived=0
@@ -26,6 +37,8 @@ mutate() {
   total=$((total + 1))
 
   cp "$file" "$TMP/orig"
+  cp "$file" "$TMP/bak/$(echo "$file" | tr / _)"
+  echo "$file" >> "$TMP/touched"
   python3 "$TMP/m.py" "$file" || { echo "  ? $name（变异没应用上，改坏的位置可能已经不在了）"; cp "$TMP/orig" "$file"; return; }
 
   if cmp -s "$TMP/orig" "$file"; then
@@ -34,7 +47,10 @@ mutate() {
     return
   fi
 
-  if (cd "$module" && GOWORK=off go test -count=1 -run "$filter" ./... >/dev/null 2>&1); then
+  # -timeout 是必须的：有些变异会让测试挂住而不是失败（比如把 ctx 换成
+  # Background，等信号的那一步就永远等不到）。没有上限的话一个这样的变异
+  # 就能把整轮跑死在那里。挂住同样说明测试察觉到了，算作被杀掉
+  if (cd "$module" && GOWORK=off go test -count=1 -timeout 90s -run "$filter" ./... >/dev/null 2>&1); then
     echo "  ✗ $name —— 改坏了但测试全过"
     survived=$((survived + 1))
   else
@@ -105,13 +121,17 @@ s=s.replace('\t\te.Use(middleware.Recover(g.recover))\n\t\te.Use(g.extra...)\n',
 s=s.replace('\t\tfor _, f := range g.routes {','\t\te.Use(g.extra...)\n\t\tfor _, f := range g.routes {')
 open(p,'w',encoding='utf-8').write(s)
 PY
-mutate "默认不信任 X-Forwarded-For" xgin/xgin.go ./xgin 'TestClientIP|TestLog' <<'PY'
+mutate "默认不信任 X-Forwarded-For" xgin/xgin.go ./xgin 'TestBuild|TestLog' <<'PY'
 import sys, re; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 s=re.sub(r'\t\tif err := e\.SetTrustedProxies\(g\.conf\(\)\.TrustedProxies\); err != nil \{\n(.*\n)*?\t\t\}\n', '', s, count=1)
 open(p,'w',encoding='utf-8').write(s)
 PY
 
 echo "== 中间件 =="
+mutate "代理网段写错要启动失败" xgin/config.go ./xgin 'TestValidate' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('if !isIPOrCIDR(p) {','if false {'))
+PY
 mutate "指标的 method 标签收敛" xgin/middleware/metric.go ./xgin 'TestMetric' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('normalizeMethod(c.Request.Method)','c.Request.Method').replace('\tif _, ok := knownMethods[m]; ok {\n\t\treturn m\n\t}\n\treturn methodOther','\treturn m'))
@@ -149,6 +169,18 @@ PY
 mutate "Redis 命令遵守请求 deadline" xredis/xredis.go ./xredis 'Test' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('\t\tContextTimeoutEnabled: true,\n',''))
+PY
+mutate "MaxCost 就是能存多少条" xcache/xcache.go ./xcache 'TestNew' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('IgnoreInternalCost: true,','IgnoreInternalCost: false,'))
+PY
+mutate "Log 关掉时 GORM 不自己往标准输出写" xgorm/xgorm.go ./xgorm 'TestNew' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('gormCfg.Logger = logger.Discard','gormCfg.Logger = logger.Default'))
+PY
+mutate "ctx 给整次逻辑请求封顶" xhttp/xhttp.go ./xhttp 'TestNew' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('SetRetryMaxWaitTime(cfg.RetryMaxWaitTime)','SetRetryMaxWaitTime(10 * time.Second)'))
 PY
 
 echo

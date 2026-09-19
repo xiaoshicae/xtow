@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/xiaoshicae/xtow/registry"
 	"github.com/xiaoshicae/xtow/xclient"
@@ -64,6 +65,12 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	gormCfg := &gorm.Config{DisableAutomaticPing: true}
 	if cfg.Log {
 		gormCfg.Logger = newGormLogger(cfg)
+	} else {
+		// 不给 Logger 的话 GORM 会补上自己的默认实现，而那个默认实现
+		// 是「带 ANSI 颜色地往 os.Stdout 写」：慢 SQL 和执行错误照样打，
+		// 只是绕开了 slog——没有级别、没有 TraceID、不是 JSON，
+		// 一行彩色文本直接插进日志流里。Log=false 要的是不打，不是换个地方打
+		gormCfg.Logger = logger.Discard
 	}
 
 	dialect, known := lookupDialect(cfg.Driver)

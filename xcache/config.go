@@ -50,6 +50,9 @@ type ClientConfig struct {
 	//
 	// 本包写入时 cost 固定为 1，所以它等价于「最多存多少条」。
 	// 自己调 C().Set 传别的 cost 时，它才是真正的成本上限。
+	//
+	// 这里统计的是使用者给出的 cost，不含 ristretto 每条 56 字节的内部开销。
+	// 按字节记 cost 时把这部分算进自己的预算里。
 	MaxCost int64 `yaml:"MaxCost"`
 
 	// BufferItems Get 的内部缓冲区大小。默认 64，官方建议值。

@@ -19,9 +19,18 @@ const ConfigKey = "XHttp"
 // 不配也能用，配一份公共的连接池和超时就够了。需要第二套参数的场景
 // 直接用 New 自己建一个。
 type Config struct {
-	// Timeout 单次请求的总超时。默认 60s。
+	// Timeout 单次尝试的超时。默认 60s。
 	//
 	// 配 0 是「永不超时」，不是「用个默认值」：对端不响应时请求会一直挂着。
+	//
+	// 注意它管的是一次尝试，不是一次逻辑请求：开了 RetryCount 之后，
+	// 最坏情况是 (RetryCount+1) × Timeout 再加上几次退避等待
+	// （实测 Timeout=300ms、RetryCount=3 时整整 1.24s）。
+	// 要给整个逻辑请求封顶，用调用方的 ctx——重试的退避和每次尝试都听它的：
+	//
+	//	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	//	defer cancel()
+	//	resp, err := xhttp.C().R().SetContext(ctx).Get(url)
 	Timeout time.Duration `yaml:"Timeout"`
 
 	// DialTimeout 建立 TCP 连接的超时。默认 30s。

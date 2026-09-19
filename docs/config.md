@@ -204,7 +204,7 @@ XCache:
 
 ```yaml
 XHttp:
-  Timeout: 60s             # 配 0 是「永不超时」，不是「用默认值」
+  Timeout: 60s             # 一次尝试的超时。配 0 是「永不超时」，不是「用默认值」
   DialTimeout: 30s
   DialKeepAlive: 30s
   MaxIdleConns: 100
@@ -221,6 +221,17 @@ XHttp:
 `RetryOnlyIdempotent` 默认开着：传输层超时分不出「请求没到服务端」和
 「服务端处理完了但响应丢了」，重发一个 POST 就可能变成重复下单。
 确认接口幂等（比如带幂等键）之后再关掉它。
+
+`Timeout` 管的是一次尝试，不是一次逻辑请求。开了 `RetryCount` 之后最坏情况是
+`(RetryCount+1) × Timeout` 再加上几次退避等待——`Timeout: 300ms` 配
+`RetryCount: 3`，实测整整跑了 1.24s。要给整次逻辑请求封顶，用调用方的 ctx，
+每次尝试和中间的退避都听它的：
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+defer cancel()
+resp, err := xhttp.C().R().SetContext(ctx).Get(url)
+```
 
 ## XGin —— Web 服务
 

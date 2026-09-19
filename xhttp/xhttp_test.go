@@ -530,3 +530,35 @@ func histogramSum(t *testing.T, h *prometheus.HistogramVec) float64 {
 	t.Fatal("没采到直方图样本")
 	return 0
 }
+
+func TestNew_ctx能给整个逻辑请求封顶(t *testing.T) {
+	// Timeout 管的是一次尝试。开了 RetryCount 之后，最坏情况是
+	// (RetryCount+1) × Timeout 再加退避——配 300ms 实际能跑到 1.2s。
+	// 唯一能给整次逻辑请求封顶的是调用方的 ctx，这里把它钉住
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	c := DefaultConfig()
+	c.Timeout = 300 * time.Millisecond
+	c.RetryCount = 3
+	c.RetryWaitTime, c.RetryMaxWaitTime = 10*time.Millisecond, 20*time.Millisecond
+	c.Trace, c.Metric = false, false
+	cli, closer, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := cli.R().SetContext(ctx).Get(srv.URL); err == nil {
+		t.Fatal("该超时的")
+	}
+	if elapsed := time.Since(start); elapsed > 900*time.Millisecond {
+		t.Errorf("ctx 给了 400ms 的预算，重试不该把它撑到 %v", elapsed.Round(10*time.Millisecond))
+	}
+}

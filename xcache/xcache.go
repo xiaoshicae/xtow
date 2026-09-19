@@ -29,6 +29,11 @@ func New(cfg ClientConfig) (*Cache, io.Closer, error) {
 		NumCounters: cfg.NumCounters,
 		MaxCost:     cfg.MaxCost,
 		BufferItems: cfg.BufferItems,
+		// ristretto 默认会把每条的内部开销（56 字节）加进 cost，
+		// 于是 cost=1 的写入实际占 57。MaxCost: 100000 配出来的缓存
+		// 只能存下一千七百多条，配置里写的数字和实际容量差着五十多倍，
+		// 而且没有任何地方会提到这件事。关掉它，cost 才是 cost
+		IgnoreInternalCost: true,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("xcache: create cache: %w", err)
