@@ -702,3 +702,21 @@ func TestValidate_代理网段写错直接起不来(t *testing.T) {
 		t.Errorf("这几个都是合法写法，不该报错: %v", err)
 	}
 }
+
+func TestBuild_multipart的内存阈值来自配置(t *testing.T) {
+	// gin 自己默认 32MB，而这个数不是「请求体上限」是「超过多少才落盘」，
+	// 实际代价约是它的三倍：一次 60MB 的上传，配 32MB 时解析这一步
+	// 让堆多占 96MB，二十个并发就是两个 G
+	withConfig(t, func(c *Config) { c.MaxMultipartMemory = 2 << 20 })
+
+	e := New(WithLog(false), WithMetric(false)).Engine()
+	if e.MaxMultipartMemory != 2<<20 {
+		t.Errorf("该用配置里的阈值，got=%d want=%d", e.MaxMultipartMemory, 2<<20)
+	}
+
+	withConfig(t, nil)
+	e = New(WithLog(false), WithMetric(false)).Engine()
+	if e.MaxMultipartMemory != 8<<20 {
+		t.Errorf("默认该是 8MB 而不是 gin 的 32MB，got=%d", e.MaxMultipartMemory)
+	}
+}

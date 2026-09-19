@@ -93,6 +93,7 @@ func (g *XGin) build() {
 	g.buildOnce.Do(func() {
 		e := gin.New()
 		e.HandleMethodNotAllowed = true // 不开的话，方法不对会返回 404 而不是 405
+		e.MaxMultipartMemory = g.conf().MaxMultipartMemory
 
 		// 默认谁都不信。gin 的默认是全都信，于是任何人发一个
 		// X-Forwarded-For 就能决定访问日志里的 client_ip 是什么。

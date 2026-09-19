@@ -71,6 +71,18 @@ type Config struct {
 	// 已经过期的 context，在途请求当场被切断。所以这里拦住它。
 	ShutdownTimeout time.Duration `yaml:"ShutdownTimeout"`
 
+	// MaxMultipartMemory 解析 multipart 表单时在内存里留多少，单位字节。默认 8MB。
+	//
+	// 它不是「请求体上限」，是「超过多少才落盘」：超出的部分写进临时文件，
+	// 不会被拒绝。实际代价是这个数的三倍左右——一次 60MB 的上传，
+	// 配 32MB 时解析这一步让堆多占 96MB，配 8MB 是 24MB，配 1MB 是 3MB。
+	// gin 自己默认 32MB，二十个并发上传就是两个 G。
+	//
+	// 框架不替业务定请求体上限，那得按接口来。要限的话在中间件里：
+	//
+	//	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
+	MaxMultipartMemory int64 `yaml:"MaxMultipartMemory"`
+
 	// TrustedProxies 信任哪些代理发来的 X-Forwarded-For / X-Real-IP。
 	// 默认一个都不信，此时 ClientIP() 就是对端地址本身。
 	//
@@ -95,12 +107,13 @@ type Config struct {
 // DefaultConfig 全部默认值集中在这里
 func DefaultConfig() Config {
 	return Config{
-		Host:              "0.0.0.0",
-		Port:              8080,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		ShutdownTimeout:   10 * time.Second,
-		Mode:              "release",
+		Host:               "0.0.0.0",
+		Port:               8080,
+		ReadHeaderTimeout:  10 * time.Second,
+		IdleTimeout:        60 * time.Second,
+		MaxMultipartMemory: 8 << 20,
+		ShutdownTimeout:    10 * time.Second,
+		Mode:               "release",
 	}
 }
 
@@ -116,6 +129,9 @@ func (c Config) validate() error {
 	}
 	// 0 在这里不是「不限时」而是「一点都不等」：Shutdown 会拿到一个已经过期的
 	// context，在途请求当场被切断，而配置文件看上去只是没设上限
+	if c.MaxMultipartMemory <= 0 {
+		return fmt.Errorf("MaxMultipartMemory must be > 0, got=%d", c.MaxMultipartMemory)
+	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("ShutdownTimeout must be > 0 (0 is not unlimited, it is no wait at all), got=%v", c.ShutdownTimeout)
 	}

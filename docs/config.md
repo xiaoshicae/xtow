@@ -247,6 +247,13 @@ XGin:
   ReadTimeout: 0s          # 默认不限制：限制它会打断大文件上传
   WriteTimeout: 0s         # 默认不限制：限制它会打断 SSE、长轮询、大文件下载
   IdleTimeout: 60s
+  MaxMultipartMemory: 8388608
+                           # 字节，默认 8MB。解析 multipart 表单时在内存里留多少。
+                           # 不是「请求体上限」，是「超过多少才落盘」：
+                           # 超出的部分写进临时文件，不会被拒绝。
+                           # 实际代价约是这个数的三倍——一次 60MB 的上传，
+                           # 配 32MB 时解析这一步让堆多占 96MB，配 8MB 是 24MB。
+                           # gin 自己默认 32MB，二十个并发上传就是两个 G
   TrustedProxies: []       # 信任哪些代理发来的 X-Forwarded-For / X-Real-IP，默认一个都不信
                            # gin 自己的默认是「全都信」，那样任何人发一个
                            # X-Forwarded-For 就能决定访问日志里的 client_ip 是什么，
@@ -269,6 +276,15 @@ xgin.New(
     xgin.WithSkipPaths("/health", "/internal/"),
     xgin.WithRequestBodyLog(false),   // 默认关，见下
 )
+```
+
+框架不替业务定请求体上限，那得按接口来。要限的话在中间件里：
+
+```go
+gx.WithMiddleware(func(c *gin.Context) {
+    c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
+    c.Next()
+})
 ```
 
 请求/响应体日志默认关闭。打开它意味着每个请求都要缓存一份 body、逐字段脱敏，
