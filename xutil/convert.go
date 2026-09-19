@@ -35,6 +35,12 @@ func Retry(parent context.Context, attempts int, timeout, interval time.Duration
 	if parent == nil {
 		parent = context.Background()
 	}
+	// 进来时就已经取消的话，一次都不用试。少了这一句，
+	// 启动到一半收到退出信号时，每个连不上的实例还要再发一次注定失败的网络请求
+	if err := parent.Err(); err != nil {
+		return err
+	}
+
 	budget := timeout*time.Duration(attempts) + interval*time.Duration(attempts-1)
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()

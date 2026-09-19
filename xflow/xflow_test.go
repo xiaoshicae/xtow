@@ -487,3 +487,82 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 		t.Error("非法配置应当让启动失败")
 	}
 }
+
+// panicMonitor 每个回调都炸，用来确认监控实现的故障不会打断业务流程
+type panicMonitor struct{}
+
+func (panicMonitor) OnStep(context.Context, *StepEvent) { panic("监控的 OnStep 炸了") }
+func (panicMonitor) OnFlow(context.Context, *FlowEvent) { panic("监控的 OnFlow 炸了") }
+
+func TestMonitor_回调panic被隔离(t *testing.T) {
+	// 观测出问题只该丢一次观测，不该把业务流程打断。
+	// 隔离是用 defer recoverNotify() 做的——recover 必须由被 defer 的那个
+	// 函数直接调用才生效，包一层就失效了，所以这条要钉住
+	withConfig(t, nil)
+	SetMonitor(panicMonitor{})
+	t.Cleanup(func() { SetMonitor(slogMonitor{}) })
+
+	d := &data{}
+	res := New("下单", ok("扣券"), ok("扣款")).Execute(context.Background(), d)
+
+	if !res.Success() {
+		t.Fatalf("监控炸了不该让流程失败：%v", res)
+	}
+	if got := d.doneList(); len(got) != 2 {
+		t.Errorf("每一步都该照常执行，got=%v", got)
+	}
+}
+
+func TestMonitor_回滚时回调panic也被隔离(t *testing.T) {
+	withConfig(t, nil)
+	SetMonitor(panicMonitor{})
+	t.Cleanup(func() { SetMonitor(slogMonitor{}) })
+
+	d := &data{}
+	res := New("下单", ok("扣券"), failing("扣款", Strong)).Execute(context.Background(), d)
+
+	if res.Success() {
+		t.Fatal("强依赖失败时流程应当失败")
+	}
+	if got := d.backList(); len(got) != 1 || got[0] != "扣券" {
+		t.Errorf("监控炸了不该拦住回滚，got=%v", got)
+	}
+}
+
+func TestSlogMonitor_级别调到debug后逐步日志还在(t *testing.T) {
+	// 成功的步骤记 debug，而默认级别是 info，所以那一行平时不拼也不写。
+	// 但「需要逐步排查时把级别调到 debug」是这个设计给出的承诺——
+	// 省开销的那个提前返回不能顺手把承诺也省掉
+	withConfig(t, nil)
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	New("下单", ok("扣券"), ok("扣款")).Execute(context.Background(), &data{})
+
+	got := buf.String()
+	for _, want := range []string{"xflow step process done", "扣券", "扣款"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("debug 级别下该看得到每一步，缺 %q\n实际=\n%s", want, got)
+		}
+	}
+}
+
+func TestSlogMonitor_默认级别下不写逐步日志(t *testing.T) {
+	// 一个五步的流程每次执行会产出六行，默认级别下全打出来日志里就只剩流程编排了
+	withConfig(t, nil)
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	New("下单", ok("扣券")).Execute(context.Background(), &data{})
+
+	if strings.Contains(buf.String(), "xflow step") {
+		t.Errorf("默认级别下不该有逐步日志\n实际=\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "xflow flow done") {
+		t.Errorf("流程结果任何时候都该看得到\n实际=\n%s", buf.String())
+	}
+}

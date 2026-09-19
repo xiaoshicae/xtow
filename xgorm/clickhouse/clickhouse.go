@@ -63,13 +63,21 @@ func resolve(c xgorm.ClientConfig) (string, xgorm.ConnInfo, error) {
 			xgorm.ConfigKey)
 	}
 
+	// 显式 ParseQuery 而不是 u.Query()：后者会把错误吞掉，只返回解得出的那部分。
+	// 于是密码里带一个字面 % （构成非法的百分号转义）时，那一项会被静默丢掉，
+	// 回写之后 DSN 里就没有密码了——服务报「认证失败」，而配置文件里密码明明写着。
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", xgorm.ConnInfo{}, fmt.Errorf(
+			"failed to parse the query part of the DSN, check the format of %s "+
+				"(a literal %% in a password must be written as %%25; details omitted to keep credentials out of logs)",
+			xgorm.ConfigKey)
+	}
+
 	// 使用者在 DSN 里显式写了的，一律不覆盖——配置里的值只是默认值
-	if v := dialTimeout(c); v != "" {
-		q := u.Query()
-		if !q.Has(dialTimeoutKey) {
-			q.Set(dialTimeoutKey, v)
-			u.RawQuery = q.Encode()
-		}
+	if v := dialTimeout(c); v != "" && !q.Has(dialTimeoutKey) {
+		q.Set(dialTimeoutKey, v)
+		u.RawQuery = q.Encode()
 	}
 
 	return u.String(), xgorm.ConnInfo{

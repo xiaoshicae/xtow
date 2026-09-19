@@ -178,3 +178,22 @@ func TestRetry_父ctx传nil等同于Background(t *testing.T) {
 		t.Errorf("成功就不该重试，got=%d", n)
 	}
 }
+
+func TestRetry_父ctx进来就已取消时一次都不试(t *testing.T) {
+	// 启动到一半收到退出信号时，每个连不上的实例不该再发一次注定失败的网络请求
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := 0
+	err := Retry(ctx, 3, time.Second, time.Second, func(context.Context) error {
+		calls++
+		return errors.New("连不上")
+	})
+
+	if calls != 0 {
+		t.Errorf("一次都不该试，got=%d 次", calls)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("该如实说是被取消了，而不是报最后一次的网络错误，got=%v", err)
+	}
+}

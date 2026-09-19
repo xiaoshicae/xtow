@@ -130,7 +130,17 @@ func injectPostgresURL(dsn string, injects map[string]string) (string, error) {
 		// 同样不回传原始错误：url.Parse 的错误里带着整串 DSN
 		return "", fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
-	q := u.Query()
+	// 显式 ParseQuery 而不是 u.Query()：后者会把错误吞掉，只返回解得出的那部分。
+	// 于是密码里带一个字面 % （构成非法的百分号转义）时，那一项会被静默丢掉，
+	// 回写之后 DSN 里就没有密码了——服务报「认证失败」，而配置文件里密码明明写着。
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		// 同样不回传原始错误：它带着出问题的那个片段，而那多半就是凭证
+		return "", fmt.Errorf("failed to parse the query part of the DSN, check the format of %s "+
+			"(a literal %% in a password must be written as %%25; details omitted to keep credentials out of logs)",
+			ConfigKey)
+	}
+
 	for _, k := range slices.Sorted(maps.Keys(injects)) {
 		if _, exists := q[k]; exists {
 			continue

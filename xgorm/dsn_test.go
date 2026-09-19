@@ -1,6 +1,7 @@
 package xgorm
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -212,5 +213,47 @@ func TestResolveDSN_不认识的驱动(t *testing.T) {
 	c.Driver, c.DSN = "oracle", "x"
 	if _, _, err := resolveDSN(c); err == nil {
 		t.Fatal("不认识的驱动应当报错")
+	}
+}
+
+func TestResolveDSN_query解析不了时报错而不是悄悄丢参数(t *testing.T) {
+	// 密码里带一个字面 % 就构成非法的百分号转义。u.Query() 会把它吞掉、
+	// 只返回解得出的那部分，回写之后 DSN 里就没有密码了——
+	// 服务报「认证失败」，而配置文件里密码明明写着。
+	const secret = "p%ssw0rd"
+	c := DefaultClientConfig()
+	c.DSN = "postgres://h:5432/db?password=" + secret + "&sslmode=require"
+	c.DialTimeout = time.Second
+
+	_, _, err := resolveDSN(c)
+	if err == nil {
+		t.Fatal("解不出来的 query 应当报错，而不是悄悄丢掉那个参数")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("错误信息里出现了凭证：%v", err)
+	}
+	if !strings.Contains(err.Error(), "%25") {
+		t.Errorf("该告诉使用者怎么改，got=%v", err)
+	}
+}
+
+func TestResolveDSN_合法的百分号转义照常保留(t *testing.T) {
+	c := DefaultClientConfig()
+	c.DSN = "postgres://h:5432/db?password=p%25ssw0rd"
+	c.DialTimeout = time.Second
+
+	dsn, _, err := resolveDSN(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("password"); got != "p%ssw0rd" {
+		t.Errorf("密码该原样留着，got=%q", got)
+	}
+	if u.Query().Get("connect_timeout") == "" {
+		t.Error("超时仍该注进去")
 	}
 }

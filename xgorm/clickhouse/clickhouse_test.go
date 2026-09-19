@@ -105,3 +105,25 @@ func mustQuery(t *testing.T, dsn string) url.Values {
 	}
 	return u.Query()
 }
+
+func TestResolve_query解析不了时报错而不是悄悄丢参数(t *testing.T) {
+	// 理由同 xgorm 的 postgres 分支：吞掉解析错误会让密码凭空消失
+	const secret = "p%ssw0rd"
+	_, _, err := resolve(cfg("clickhouse://h:9000/db?password="+secret, time.Second))
+	if err == nil {
+		t.Fatal("解不出来的 query 应当报错，而不是悄悄丢掉那个参数")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("错误信息里出现了凭证：%v", err)
+	}
+}
+
+func TestResolve_合法的百分号转义照常保留(t *testing.T) {
+	dsn, _, err := resolve(cfg("clickhouse://h:9000/db?password=p%25ssw0rd", time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustQuery(t, dsn).Get("password"); got != "p%ssw0rd" {
+		t.Errorf("密码该原样留着，got=%q", got)
+	}
+}
