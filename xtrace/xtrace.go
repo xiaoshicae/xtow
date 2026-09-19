@@ -168,7 +168,7 @@ func (c *providerCloser) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
-	detach()
+	detach(c.tp)
 	if err := c.tp.Shutdown(ctx); err != nil {
 		return fmt.Errorf("xtrace: shutdown: %w", err)
 	}
@@ -255,11 +255,18 @@ func AddSpanProcessor(sp sdktrace.SpanProcessor) {
 	pending = append(pending, sp)
 }
 
-// detach 关闭后清掉 provider，避免后来的注册挂到已关闭的实例上
-func detach() {
+// detach 关闭后清掉 provider，避免后来的注册挂到已关闭的实例上。
+//
+// 只清掉自己：New 出来的实例不一定是装到全局的那个——测试要一套干净的
+// 链路设施、或者同时存在两套配置时，关掉其中一个曾经把全局那个也一起抹掉。
+// 之后每一次 AddSpanProcessor 都会挂到 pending 上再也没人读，
+// Span 照常产生、永远到不了上报端，而且没有任何迹象。
+func detach(tp *sdktrace.TracerProvider) {
 	mu.Lock()
-	live = nil
-	mu.Unlock()
+	defer mu.Unlock()
+	if live == tp {
+		live = nil
+	}
 }
 
 // initTracing 取走待办的 SpanProcessor、装好链路设施、挂上 provider。

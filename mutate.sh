@@ -145,6 +145,18 @@ mutate "请求头里的凭证被遮掉" xgin/middleware/redact.go ./xgin 'TestRe
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('\t\tif set[strings.ToLower(k)] {\n\t\t\tattrs = append(attrs, slog.String(k, Redacted))\n\t\t\tcontinue\n\t\t}\n',''))
 PY
+mutate "关独立实例不影响全局链路" xtrace/xtrace.go ./xtrace 'TestClose' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('\tif live == tp {\n\t\tlive = nil\n\t}','\tlive = nil'))
+PY
+mutate "配置一律在 Start 生效" xgin/xgin.go ./xgin 'TestStart' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('\tapplyConfig(g.engine, c)\n',''))
+PY
+mutate "密码里的参数名骗不过注入" xgorm/dsn.go ./xgorm 'TestInjectPostgresKV' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('for _, tok := range splitKV(dsn) {\n\t\tif k, _, ok := strings.Cut(tok, \"=\"); ok {','for _, tok := range strings.Fields(dsn) {\n\t\tif k, _, ok := strings.Cut(tok, \"=\"); ok {'))
+PY
 mutate "查询串不进访问日志" xgin/middleware/log.go ./xgin 'TestLog' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('"path", c.Request.URL.Path,','"path", c.Request.URL.RequestURI(),'))

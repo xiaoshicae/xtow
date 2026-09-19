@@ -280,12 +280,12 @@ func TestRetry_关掉幂等限制后POST也重试(t *testing.T) {
 func TestC_初始化前有带超时的兜底实例(t *testing.T) {
 	// 零值超时是「永不超时」：关闭阶段发一个这样的请求，整个退出流程就卡住了
 	mu.Lock()
-	old, oldRaw := current, rawOwned
-	current, rawOwned = fallbackClient(), nil
+	old := current
+	current = fallbackClient()
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
-		current, rawOwned = old, oldRaw
+		current = old
 		mu.Unlock()
 	})
 
@@ -331,11 +331,11 @@ func TestInit_没配也能用(t *testing.T) {
 	// 与 xgorm / xredis 不同：HTTP 客户端不连任何外部资源，没配也该给一个能用的
 	withMetrics(t)
 	mu.Lock()
-	old, oldRaw := current, rawOwned
+	old := current
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
-		current, rawOwned = old, oldRaw
+		current = old
 		mu.Unlock()
 	})
 

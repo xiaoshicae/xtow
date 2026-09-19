@@ -31,12 +31,9 @@ import (
 type XGin struct {
 	settings settings
 
-	// override 实例级配置，非 nil 时压过配置文件里的 XGin 块。
-	// 由 WithConfig 设置，见那里的说明。
-	override *Config
-	routes   []func(*gin.Engine)
-	extra    []gin.HandlerFunc
-	recover  gin.RecoveryFunc
+	routes  []func(*gin.Engine)
+	extra   []gin.HandlerFunc
+	recover gin.RecoveryFunc
 
 	buildOnce sync.Once
 	engine    *gin.Engine
@@ -52,7 +49,7 @@ func New(opts ...Option) *XGin {
 	for _, o := range opts {
 		o(&s)
 	}
-	return &XGin{settings: s, override: s.override}
+	return &XGin{settings: s}
 }
 
 // CurrentConfig 返回配置文件里 XGin 那一块解出来的配置（拷贝）。
@@ -93,15 +90,9 @@ func (g *XGin) build() {
 	g.buildOnce.Do(func() {
 		e := gin.New()
 		e.HandleMethodNotAllowed = true // 不开的话，方法不对会返回 404 而不是 405
-		e.MaxMultipartMemory = g.conf().MaxMultipartMemory
 
-		// 默认谁都不信。gin 的默认是全都信，于是任何人发一个
-		// X-Forwarded-For 就能决定访问日志里的 client_ip 是什么。
-		// 返回的错误只会在网段写错时出现，那是配置问题，留给 Start 的校验报
-		if err := e.SetTrustedProxies(g.conf().TrustedProxies); err != nil {
-			slog.Warn("xgin invalid TrustedProxies, trusting none", "error", err)
-			_ = e.SetTrustedProxies([]string{})
-		}
+		// 配置驱动的那几项不在这里设，在 Start 里设。理由见 applyConfig
+		applyConfig(e, DefaultConfig())
 
 		// 洋葱模型，自外向内：
 		//   LogScope → Trace → Log → Metric → Recover → 用户中间件 → handler
@@ -159,14 +150,39 @@ func (g *XGin) build() {
 	})
 }
 
+// applyConfig 把配置驱动的 engine 设置落实到 e 上。
+//
+// 单独抽出来是因为它必须在 Start 里调，不能在装配里：装配可能发生在配置
+// 加载之前（使用者在 main 顶上调一下 Engine() 就会），那时读到的是默认值。
+// 而 Port、Mode、ShutdownTimeout 一直是 Start 才读的——两边不一致的话，
+// 同一份配置文件里一半生效一半不生效，TrustedProxies 这种安全项还会
+// 静默退回默认值。所以规矩是：配置一律在 Start 生效。
+//
+// 单独拿 Engine() 去用、不经过 Start 的话，拿到的是一份默认值配好的
+// engine：不信任何代理、8MB 的 multipart 阈值，都是偏安全的那一侧。
+func applyConfig(e *gin.Engine, c Config) {
+	if e == nil {
+		return
+	}
+	e.MaxMultipartMemory = c.MaxMultipartMemory
+
+	// 默认谁都不信。gin 的默认是全都信，于是任何人发一个
+	// X-Forwarded-For 就能决定访问日志里的 client_ip 是什么。
+	// 网段写错在 validate 里就拦下了，这里的错误兜底成「谁都不信」
+	if err := e.SetTrustedProxies(c.TrustedProxies); err != nil {
+		slog.Warn("xgin invalid TrustedProxies, trusting none", "error", err)
+		_ = e.SetTrustedProxies([]string{})
+	}
+}
+
 // conf 取这个实例该用的配置。
 //
 // 默认读配置文件里的 XGin 块，而且是在用的时候才读、不在 New 里读：
 // New 可能发生在配置加载之前（使用者在 main 顶上就把 XGin 建好了），
 // 那时候读到的是一份默认值，配置文件从此再也不生效。
 func (g *XGin) conf() Config {
-	if g.override != nil {
-		return *g.override
+	if g.settings.override != nil {
+		return *g.settings.override
 	}
 	return cfg
 }
@@ -181,6 +197,7 @@ func (g *XGin) Start(ctx context.Context) error {
 	// 那时读到的是默认值，配置里写的 Mode 从此再也不生效
 	gin.SetMode(c.Mode)
 	g.build()
+	applyConfig(g.engine, c)
 
 	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 	srv := g.newServer(c, addr)

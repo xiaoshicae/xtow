@@ -565,3 +565,65 @@ func loadConfig(t *testing.T, yml string) {
 		t.Fatalf("加载配置失败：%v", err)
 	}
 }
+
+func TestClose_关掉独立实例不影响全局(t *testing.T) {
+	// New 出来的实例不一定是装到全局的那个——测试要一套干净的链路设施、
+	// 或者同时存在两套配置时都会这样。关掉其中一个曾经把全局那个也抹掉，
+	// 之后每一次 AddSpanProcessor 都挂到 pending 上再也没人读：
+	// Span 照常产生、永远到不了上报端，而且没有任何迹象
+	reset := func() { mu.Lock(); live, pending = nil, nil; mu.Unlock() }
+	reset()
+	t.Cleanup(reset)
+
+	c := DefaultConfig()
+	c.Enable = true
+	old := cfg
+	cfg = c
+	t.Cleanup(func() { cfg = old })
+
+	frameworkCloser, err := initTracing(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = frameworkCloser.Close() })
+
+	mu.Lock()
+	installed := live
+	mu.Unlock()
+	if installed == nil {
+		t.Fatal("initTracing 之后 live 该有值")
+	}
+
+	// 另造一个，从没 Install 过，只把它关掉
+	_, standalone, err := New(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	after := live
+	mu.Unlock()
+	if after != installed {
+		t.Errorf("关掉一个从没装过的实例，把全局装着的那个清掉了：前 %p 后 %p", installed, after)
+	}
+
+	// 全局还活着的话，后来的 SpanProcessor 该挂到它上面而不是 pending
+	AddSpanProcessor(noopProcessor{})
+	mu.Lock()
+	n := len(pending)
+	mu.Unlock()
+	if n != 0 {
+		t.Errorf("SpanProcessor 落到了没人读的 pending 上，pending=%d", n)
+	}
+}
+
+// noopProcessor 什么都不做的 SpanProcessor
+type noopProcessor struct{}
+
+func (noopProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+func (noopProcessor) OnEnd(sdktrace.ReadOnlySpan)                     {}
+func (noopProcessor) Shutdown(context.Context) error                  { return nil }
+func (noopProcessor) ForceFlush(context.Context) error                { return nil }

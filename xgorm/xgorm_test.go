@@ -421,3 +421,25 @@ func (d loggingDialector) DefaultValueOf(*schema.Field) clause.Expression {
 func (d loggingDialector) BindVarTo(clause.Writer, *gorm.Statement, any) {}
 func (d loggingDialector) QuoteTo(clause.Writer, string)                 {}
 func (d loggingDialector) Explain(sql string, _ ...any) string           { return sql }
+
+func TestInjectPostgresKV_密码里的参数名骗不过它(t *testing.T) {
+	// 曾经用正则扫 key=，于是密码里出现 connect_timeout= 就能骗过它，
+	// DialTimeout 这项配置悄悄失效——没有任何迹象
+	cases := []struct {
+		name, dsn string
+		want      bool // 期望注入 connect_timeout
+	}{
+		{"密码里含参数名", "host=h dbname=d password='a connect_timeout=99 b'", true},
+		{"普通密码", "host=h dbname=d password=plain", true},
+		{"真的配过了", "host=h dbname=d connect_timeout=9", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := injectPostgresKV(c.dsn, map[string]string{"connect_timeout": "1"})
+			injected := strings.HasSuffix(got, "connect_timeout=1")
+			if injected != c.want {
+				t.Errorf("注入=%v want=%v\n入：%s\n出：%s", injected, c.want, c.dsn, got)
+			}
+		})
+	}
+}

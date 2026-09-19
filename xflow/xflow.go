@@ -158,6 +158,11 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 	res := &Result{}
 	start := time.Now()
 
+	// 用 defer 而不是在每个出口各写一遍：出口有三个（取消、失败、正常走完），
+	// 以后再加一个分支时漏掉通知，表现是监控上这次执行凭空消失，
+	// 而流程本身照常返回——不会有人发现
+	defer func() { f.notifyFlow(ctx, m, res, start) }()
+
 	done := make([]Processor[T], 0, len(f.steps))
 
 	for _, p := range f.steps {
@@ -165,7 +170,6 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 		if err := ctx.Err(); err != nil {
 			res.Err = fmt.Errorf("xflow: flow %q canceled before step %q: %w", f.name, p.Name(), err)
 			f.rollback(ctx, data, done, res, m)
-			f.notifyFlow(ctx, m, res, start)
 			return res
 		}
 
@@ -200,11 +204,8 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 		}
 
 		f.rollback(ctx, data, done, res, m)
-		f.notifyFlow(ctx, m, res, start)
 		return res
 	}
-
-	f.notifyFlow(ctx, m, res, start)
 	return res
 }
 

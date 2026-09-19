@@ -27,7 +27,11 @@ import (
 // 整个进程的退出流程就被卡在那里了。
 const fallbackTimeout = 30 * time.Second
 
-// New 按配置建一个 HTTP 客户端，不触碰任何全局变量。
+// New 按配置建一个 HTTP 客户端，不碰本包的全局实例。
+//
+// 一个例外：cfg.Metric 开着时（默认开着）耗时直方图要注册到 xmetric
+// 的全局 Registry —— 指标本来就只有一份，注册到别处就导不出去。
+// 不想碰它就把 cfg.Metric 关掉。
 //
 // 返回的 io.Closer 释放连接池里的空闲连接。
 func New(cfg Config) (*resty.Client, io.Closer, error) {
@@ -148,17 +152,12 @@ func errorsAs(err error, target any) bool { return errors.As(err, target) }
 // ---- 全局实例 ----
 
 var (
-	mu       sync.RWMutex
-	current  = fallbackClient()
-	rawOwned *http.Client
+	mu      sync.RWMutex
+	current = fallbackClient()
 )
 
 // fallbackClient 初始化之前或关闭之后用的兜底 client，带超时
 func fallbackClient() *resty.Client { return resty.New().SetTimeout(fallbackTimeout) }
-
-// fallbackRaw 兜底的原生 client。共用一个而不是每次新建：
-// 每次新建意味着每次请求都要重新握手，连接池形同虚设。
-var fallbackRaw = &http.Client{Timeout: fallbackTimeout}
 
 // C 取 resty client。
 //
@@ -181,16 +180,12 @@ func R(ctx context.Context) *resty.Request { return C().R().SetContext(ctx) }
 // 用于需要自己处理响应体的场景，比如 SSE 这类流式请求——
 // resty 会把响应整个读进内存，那对流式接口是不对的。
 //
-// 初始化之前返回一个带兜底超时的实例，而不是 http.DefaultClient：
+// 初始化之前返回兜底实例内部的那个，而不是 http.DefaultClient：
 // 后者的超时是 0，请求可以永久挂住。
-func RawClient() *http.Client {
-	mu.RLock()
-	defer mu.RUnlock()
-	if rawOwned != nil {
-		return rawOwned
-	}
-	return fallbackRaw
-}
+//
+// 直接从 C() 取而不是另存一份：两份关联状态要同步维护，
+// 而 resty 的 GetClient 返回的就是它一直在用的那个，取值一致、生命周期一致。
+func RawClient() *http.Client { return C().GetClient() }
 
 // ---- 登记 ----
 
@@ -214,7 +209,6 @@ func initClient(context.Context) (io.Closer, error) {
 
 	mu.Lock()
 	current = client
-	rawOwned = client.GetClient()
 	mu.Unlock()
 
 	slog.Info("xhttp ready", "timeout", cfg.Timeout, "max_idle_conns_per_host", cfg.MaxIdleConnsPerHost, "retries", cfg.RetryCount)
@@ -230,7 +224,6 @@ type resetCloser struct{ inner io.Closer }
 func (c *resetCloser) Close() error {
 	mu.Lock()
 	current = fallbackClient()
-	rawOwned = nil
 	mu.Unlock()
 	return c.inner.Close()
 }

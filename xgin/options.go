@@ -63,7 +63,7 @@ func WithSkipPaths(paths ...string) Option {
 
 // WithRequestBodyLog 是否把请求体记进访问日志。默认不记。
 //
-// 记 body 要缓存整个请求体并对每个字段做脱敏，代价和风险都不小。
+// 记 body 要缓存请求体的前 256KB 并对每个字段做脱敏，代价和风险都不小。
 // 打开前先确认敏感字段配全了（middleware.AddSensitiveFields）。
 func WithRequestBodyLog(on bool) Option { return func(s *settings) { s.logBody = on } }
 

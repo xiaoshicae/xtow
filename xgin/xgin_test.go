@@ -668,22 +668,66 @@ func TestBuild_默认不信任何代理(t *testing.T) {
 	}
 }
 
-func TestBuild_配了代理网段才认转发头(t *testing.T) {
+func TestStart_配了代理网段才认转发头(t *testing.T) {
 	withConfig(t, func(c *Config) { c.TrustedProxies = []string{"10.0.0.0/8"} })
 
 	var got string
-	e := New(WithLog(false), WithMetric(false)).
+	g := New(WithLog(false), WithMetric(false)).
 		WithRoutes(func(e *gin.Engine) {
 			e.GET("/", func(c *gin.Context) { got = c.ClientIP() })
-		}).Engine()
+		})
+	startForConfig(t, g)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.0.0.5:1234"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4")
-	e.ServeHTTP(httptest.NewRecorder(), req)
+	g.Engine().ServeHTTP(httptest.NewRecorder(), req)
 
 	if got != "1.2.3.4" {
 		t.Errorf("对端在信任网段内，应该认转发头里的地址，got=%q", got)
+	}
+}
+
+// startForConfig 真的把服务起起来，好让配置驱动的那几项落到 engine 上。
+// 配置一律在 Start 生效——装配可能发生在配置加载之前
+func startForConfig(t *testing.T, g *XGin) {
+	t.Helper()
+	port := freePort(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	go func() { _ = g.Start(context.Background()) }()
+	waitServing(t, fmt.Sprintf("http://127.0.0.1:%d/nothing", port))
+	t.Cleanup(func() { _ = g.Stop(context.Background()) })
+}
+
+func TestStart_装配早于配置加载时配置照样生效(t *testing.T) {
+	// 回归用例。使用者在 main 顶上建好 XGin 并调 Engine()（README 允许），
+	// 之后框架才把配置文件解进来。曾经 TrustedProxies 和
+	// MaxMultipartMemory 是在装配里读的，于是这两项永远停在默认值，
+	// 而同一份配置里的 Port / Mode 照常生效——一半生效一半不生效，
+	// 其中一项还是安全设置，静默退回默认值
+	withConfig(t, nil)
+
+	var got string
+	g := New(WithLog(false), WithMetric(false)).
+		WithRoutes(func(e *gin.Engine) {
+			e.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+		})
+	g.Engine() // 装配发生在配置加载之前
+
+	cfg.TrustedProxies = []string{"10.0.0.0/8"}
+	cfg.MaxMultipartMemory = 1 << 20
+	startForConfig(t, g)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	g.Engine().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "1.2.3.4" {
+		t.Errorf("配置里的 TrustedProxies 没生效，client_ip=%q", got)
+	}
+	if g.Engine().MaxMultipartMemory != 1<<20 {
+		t.Errorf("配置里的 MaxMultipartMemory 没生效，got=%d", g.Engine().MaxMultipartMemory)
 	}
 }
 
@@ -703,20 +747,39 @@ func TestValidate_代理网段写错直接起不来(t *testing.T) {
 	}
 }
 
-func TestBuild_multipart的内存阈值来自配置(t *testing.T) {
+func TestStart_multipart的内存阈值来自配置(t *testing.T) {
 	// gin 自己默认 32MB，而这个数不是「请求体上限」是「超过多少才落盘」，
 	// 实际代价约是它的三倍：一次 60MB 的上传，配 32MB 时解析这一步
 	// 让堆多占 96MB，二十个并发就是两个 G
 	withConfig(t, func(c *Config) { c.MaxMultipartMemory = 2 << 20 })
 
+	g := New(WithLog(false), WithMetric(false))
+	startForConfig(t, g)
+	if got := g.Engine().MaxMultipartMemory; got != 2<<20 {
+		t.Errorf("该用配置里的阈值，got=%d want=%d", got, 2<<20)
+	}
+}
+
+func TestEngine_不经过Start时用的是偏安全的默认值(t *testing.T) {
+	// 单独拿 Engine() 去用、不经过 Start 的话，拿到的是一份默认值配好的
+	// engine：不信任何代理、8MB 的 multipart 阈值，都是偏安全的那一侧
+	withConfig(t, func(c *Config) {
+		c.MaxMultipartMemory = 64 << 20
+		c.TrustedProxies = []string{"0.0.0.0/0"}
+	})
+
 	e := New(WithLog(false), WithMetric(false)).Engine()
-	if e.MaxMultipartMemory != 2<<20 {
-		t.Errorf("该用配置里的阈值，got=%d want=%d", e.MaxMultipartMemory, 2<<20)
+	if e.MaxMultipartMemory != 8<<20 {
+		t.Errorf("没经过 Start，该是默认的 8MB，got=%d", e.MaxMultipartMemory)
 	}
 
-	withConfig(t, nil)
-	e = New(WithLog(false), WithMetric(false)).Engine()
-	if e.MaxMultipartMemory != 8<<20 {
-		t.Errorf("默认该是 8MB 而不是 gin 的 32MB，got=%d", e.MaxMultipartMemory)
+	var got string
+	e.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	e.ServeHTTP(httptest.NewRecorder(), req)
+	if got != "10.0.0.5" {
+		t.Errorf("没经过 Start，该谁都不信，got=%q", got)
 	}
 }

@@ -75,7 +75,8 @@ StageLog → StageTelemetry → StageClient → StageServer
 ### 二、每个集成是独立的 Go module
 
 这一条直接关系到使用体验。Go 的 MVS 会把**整个模块图**里的版本要求强加给使用者——
-哪怕他一个包都没 import。实测：一个只 import 了零依赖包 `xone/xerror` 的应用，
+哪怕他一个包都没 import。在前身项目 xone 上实测过：一个只 import 了它那个零依赖
+错误包的应用，
 自己写死 `gin v1.9.1`，最终被顶到了 `v1.12.0`，还被定死了 gorm、redis、otel 的版本。
 
 所以：

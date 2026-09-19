@@ -6,7 +6,6 @@ import (
 	"maps"
 	"math"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -151,18 +150,21 @@ func injectPostgresURL(dsn string, injects map[string]string) (string, error) {
 	return u.String(), nil
 }
 
-// pgKeyPattern 匹配 key=value 形式 DSN 里的 key
+// injectPostgresKV 往 key=value 形式 DSN 补参数，已有的 key 保留。
 //
-// 不处理 value 内部含 "key=" 子串的极端情况：那需要一个完整的 libpq 解析器，
-// 而这里只是为了「不覆盖使用者已经写过的 key」，多注入一个参数的后果是
-// 服务端报参数重复，会在启动时暴露，不是静默错误
-var pgKeyPattern = regexp.MustCompile(`(?:^|\s)([a-zA-Z_][a-zA-Z0-9_]*)=`)
-
-// injectPostgresKV 往 key=value 形式 DSN 补参数，已有的 key 保留
+// 判断「已经写过哪些 key」走 splitKV，和提取连接信息用的是同一份解析。
+// 这里曾经另用一个正则扫 key=，于是密码里出现 connect_timeout= 就能骗过它：
+//
+//	password='a connect_timeout=99 b'   →   以为已经配过，不再注入
+//
+// 结果是 DialTimeout 这项配置悄悄失效——没有任何迹象。
+// 同一种格式只留一套解析规则，以后改引号规则也只有一处要改。
 func injectPostgresKV(dsn string, injects map[string]string) string {
 	existing := map[string]struct{}{}
-	for _, m := range pgKeyPattern.FindAllStringSubmatch(dsn, -1) {
-		existing[m[1]] = struct{}{}
+	for _, tok := range splitKV(dsn) {
+		if k, _, ok := strings.Cut(tok, "="); ok {
+			existing[k] = struct{}{}
+		}
 	}
 
 	var sb strings.Builder

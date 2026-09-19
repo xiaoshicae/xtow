@@ -2,6 +2,7 @@ package xmetric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -61,7 +62,8 @@ func New(cfg Config) (*Metrics, io.Closer, error) {
 //
 // 开启 LogErrorMetric 时还会把当前的 slog 默认 logger 包一层，
 // 让 Error 及以上级别的日志自动计入 log_errors_total。
-// 包的是 slog.Default()，不是本框架的某个类型——不用 xlog 也一样生效。
+// 计数走的是 xlog.AddObserver，所以它只统计经 xlog 写出去的日志：
+// 自己另起一套 slog handler 的话，这个指标是空的。
 func (m *Metrics) Install() {
 	// 先把 logCounter 填好，最后才发布 —— 顺序反过来的话，current 已经指向
 	// 本实例、而 logCounter 还在被写，这中间每一条错误日志都在读一个
@@ -171,7 +173,7 @@ func register(reg *prometheus.Registry, c prometheus.Collector) (prometheus.Coll
 		return c, nil
 	}
 	var are prometheus.AlreadyRegisteredError
-	if ok := asAlreadyRegistered(err, &are); ok {
+	if errors.As(err, &are) {
 		return are.ExistingCollector, nil
 	}
 	// 同名不同标签之类的冲突：这个 collector 不在 registry 里，

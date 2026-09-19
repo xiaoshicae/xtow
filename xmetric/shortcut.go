@@ -2,7 +2,6 @@ package xmetric
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -179,11 +178,6 @@ func histogramOf(name string, labelNames []string) *prometheus.HistogramVec {
 			ConstLabels: ConstLabels(),
 		}, labelNames)
 	})
-}
-
-// asAlreadyRegistered 抽出来是为了让 xmetric.go 不必再 import errors
-func asAlreadyRegistered(err error, target *prometheus.AlreadyRegisteredError) bool {
-	return errors.As(err, target)
 }
 
 // clearCollectors 清空缓存，返回清掉的数量
