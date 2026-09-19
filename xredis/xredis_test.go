@@ -2,9 +2,11 @@ package xredis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -385,5 +387,43 @@ func TestPoolStats_读的是活着的实例(t *testing.T) {
 	got := poolStats()
 	if len(got) != 1 || got["cache"] == nil {
 		t.Errorf("应读到活着的实例，got=%v", got)
+	}
+}
+
+func TestNew_命令遵守调用方的deadline(t *testing.T) {
+	// go-redis 默认不让请求的 context 管住 socket 读写：不开
+	// ContextTimeoutEnabled 的话，每个命令用的是 ReadTimeout 这组固定值，
+	// 调用方给的 deadline 只是摆设——一个 200ms 超时的请求照样会在一个
+	// 慢 Redis 上等满 ReadTimeout，上游的超时预算和级联保护跟着一起失效
+	f := newFakeRedis(t)
+	f.setStall("get") // 收下 GET 但永不回复
+
+	c := liveCfg(f)
+	c.ReadTimeout = 5 * time.Second // 比 ctx 的预算大得多
+	c.MaxRetries = -1               // 重试会掩盖掉这件事
+	client, closer, err := New(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = client.Get(ctx, "k").Err()
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("该超时的")
+	}
+	// go-redis 把 ctx 的 deadline 设到 socket 上，所以报上来的是
+	// os.ErrDeadlineExceeded（i/o timeout）而不是 context.DeadlineExceeded。
+	// 调用方要判超时得认这个，或者干脆判 ctx.Err()
+	if !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("该是超时错误，got=%v (%T)", err, err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("ctx 给了 200ms，实际等了 %v —— deadline 没管住 socket 读写", elapsed.Round(10*time.Millisecond))
 	}
 }

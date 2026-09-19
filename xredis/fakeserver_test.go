@@ -23,6 +23,7 @@ type fakeRedis struct {
 	mu       sync.Mutex
 	commands []string // 收到过的命令名，小写
 	failPing bool     // 让 PING 返回错误，用来测连不上的分支
+	stall    string   // 这个命令收下但永不回复，用来测 deadline
 	live     int      // 当前还开着的连接数
 }
 
@@ -59,6 +60,13 @@ func (f *fakeRedis) setFailPing(v bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failPing = v
+}
+
+// setStall 让某个命令收下之后永不回复，模拟一个卡住的 Redis
+func (f *fakeRedis) setStall(cmd string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stall = cmd
 }
 
 // liveConns 当前还开着的连接数。
@@ -106,7 +114,13 @@ func (f *fakeRedis) serve(conn net.Conn) {
 		f.mu.Lock()
 		f.commands = append(f.commands, name)
 		fail := f.failPing
+		stall := f.stall == name
 		f.mu.Unlock()
+
+		if stall {
+			// 收下了，就是不回。连接留着，让调用方自己决定等到什么时候
+			continue
+		}
 
 		var reply string
 		switch {

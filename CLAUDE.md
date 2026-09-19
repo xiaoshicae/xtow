@@ -40,6 +40,36 @@ slog.Info("xgorm ready", "driver", info.Driver, "addr", info.Addr) // 日志用�
 go test -run=NONE -bench=. -benchtime=100000x ./xlog/ ./xflow/ ./xgin/middleware/
 ```
 
+## 第三方库的默认值一律要量过
+
+这个仓库被外部 review 挑出来的问题里，**大半是同一个毛病**：接了一个库，
+用了它的默认行为，没量过它到底是什么行为，然后按自己以为的那个写进文档。
+
+已经踩过的（每一条都是真的量出来才发现的）：
+
+| 库 | 以为的 | 实际的 |
+|---|---|---|
+| gin | `TrustedProxies` 默认安全 | 默认 `0.0.0.0/0`，谁发 `X-Forwarded-For` 谁就是 `client_ip` |
+| gin | `MaxMultipartMemory` 是请求体上限 | 是落盘阈值，堆开销约为它的三倍；32MB 默认 = 每请求 96MB |
+| gorm | 不给 Logger 就是不打日志 | 补上它自己的默认：带 ANSI 颜色写 `os.Stdout` |
+| gorm | `gorm.Open` 只装配 | 会自己 ping 一次，用的是它自己的 context |
+| go-redis | 命令听调用方的 deadline | 默认不听，只认 `ReadTimeout`；实测 200ms 的预算等满 5s |
+| ristretto | `MaxCost` 就是容量 | 每条另加 56 字节内部开销，配 2000 实际存 35 条 |
+| resty | `Timeout` 管一次请求 | 管一次尝试；配 300ms + 3 次重试实测跑 1.24s |
+| otelhttp | `CloseIdleConnections` 能传下去 | 它没实现，整条调用变成空操作 |
+| net/http | `Shutdown` 超时会断开连接 | 只返回错误，在途连接照跑 |
+
+所以接一个新库、或者升级一个库的时候：
+
+1. **写进文档的每一句行为描述，先用一段代码量出来**，别照抄它的 README。
+2. **我们没显式设的字段就是我们接受了它的默认值**——列一遍这些字段，
+   逐个问「它的默认值是什么，我知道吗」。
+3. 量出来的数字写进注释和 `docs/config.md`。后来的人不必再量一次，
+   升级依赖之后数字对不上也能立刻看出来。
+
+`./mutate.sh` 是这件事的兜底：把每条承诺对应的代码改坏，看有没有测试会失败。
+活下来的变异 = 一条没有牙齿的承诺。改完安全或生命周期相关的代码跑一次。
+
 ## 三条设计原则
 
 1. **`init()` 只登记，不初始化**——真正的初始化由框架按 Stage 档位执行，
@@ -66,5 +96,6 @@ go test -run=NONE -bench=. -benchtime=100000x ./xlog/ ./xflow/ ./xgin/middleware
 ```bash
 ./test.sh          # 全量测试（跨 module，带 -race）
 ./check.sh         # 架构约束 + 依赖边界 + gofmt/vet
+./mutate.sh        # 变异测试：哪些承诺没有测试盯着（要干净工作区，几分钟）
 ./release.sh vX.Y.Z --apply
 ```

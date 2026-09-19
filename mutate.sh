@@ -9,6 +9,11 @@
 #
 # 这不是 CI 的一部分（跑一轮要几分钟，而且要改工作区），是改完一批
 # 安全或生命周期相关的代码之后手动跑一次的东西。
+#
+# 只有「我们自己有代码在守」的承诺才适合放进来。像「ctx 能给整次逻辑请求
+# 封顶」那种由依赖库保证的性质，这里没有哪一行可以改坏，硬写一条变异
+# 只会让「活下来 = 缺测试」这个信号失真——那种承诺靠测试守着就行，
+# 它防的是升级依赖时的回归，不是防我们自己改错。
 set -e
 
 [ -z "$(git status --porcelain)" ] || { echo "✗ 工作区不干净，先提交或暂存"; exit 1; }
@@ -166,7 +171,7 @@ mutate "首次建连受 ctx 管" xgorm/xgorm.go ./xgorm 'TestNew' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('gorm.Config{DisableAutomaticPing: true}','gorm.Config{}'))
 PY
-mutate "Redis 命令遵守请求 deadline" xredis/xredis.go ./xredis 'Test' <<'PY'
+mutate "Redis 命令遵守请求 deadline" xredis/xredis.go ./xredis 'TestNew' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('\t\tContextTimeoutEnabled: true,\n',''))
 PY
@@ -177,10 +182,6 @@ PY
 mutate "Log 关掉时 GORM 不自己往标准输出写" xgorm/xgorm.go ./xgorm 'TestNew' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('gormCfg.Logger = logger.Discard','gormCfg.Logger = logger.Default'))
-PY
-mutate "ctx 给整次逻辑请求封顶" xhttp/xhttp.go ./xhttp 'TestNew' <<'PY'
-import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
-open(p,'w',encoding='utf-8').write(s.replace('SetRetryMaxWaitTime(cfg.RetryMaxWaitTime)','SetRetryMaxWaitTime(10 * time.Second)'))
 PY
 
 echo
