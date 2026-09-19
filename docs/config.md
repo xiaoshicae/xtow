@@ -236,6 +236,12 @@ XGin:
   ReadTimeout: 0s          # 默认不限制：限制它会打断大文件上传
   WriteTimeout: 0s         # 默认不限制：限制它会打断 SSE、长轮询、大文件下载
   IdleTimeout: 60s
+  TrustedProxies: []       # 信任哪些代理发来的 X-Forwarded-For / X-Real-IP，默认一个都不信
+                           # gin 自己的默认是「全都信」，那样任何人发一个
+                           # X-Forwarded-For 就能决定访问日志里的 client_ip 是什么，
+                           # 建在这个字段上的限流和审计跟着一起失效。
+                           # 真在负载均衡后面时写它那一段网段：["10.0.0.0/8"]
+                           # 写错的网段会直接启动失败，不会只生效一半
   ShutdownTimeout: 10s     # HTTP 服务能占的那一份，必须 > 0
                            # 到点仍有在途请求时会强制断连：Shutdown 只返回错误、
                            # 不动那些连接，不补这一刀的话 handler 会在框架关掉

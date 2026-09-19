@@ -645,3 +645,60 @@ func TestBuild_metrics端点也走用户中间件(t *testing.T) {
 		}
 	}
 }
+
+func TestBuild_默认不信任何代理(t *testing.T) {
+	// gin 自己的默认是 trustedProxies = 0.0.0.0/0 + ::/0，也就是全都信。
+	// 那意味着任何人发一个 X-Forwarded-For 就能决定访问日志里的
+	// client_ip 是什么——日志可以伪造，建在这个字段上的限流和审计一起失效
+	withConfig(t, nil)
+
+	var got string
+	e := New(WithLog(false), WithMetric(false)).
+		WithRoutes(func(e *gin.Engine) {
+			e.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+		}).Engine()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	e.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "10.0.0.5" {
+		t.Errorf("client_ip 应该是对端地址本身，got=%q（请求头里伪造的是 1.2.3.4）", got)
+	}
+}
+
+func TestBuild_配了代理网段才认转发头(t *testing.T) {
+	withConfig(t, func(c *Config) { c.TrustedProxies = []string{"10.0.0.0/8"} })
+
+	var got string
+	e := New(WithLog(false), WithMetric(false)).
+		WithRoutes(func(e *gin.Engine) {
+			e.GET("/", func(c *gin.Context) { got = c.ClientIP() })
+		}).Engine()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	e.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "1.2.3.4" {
+		t.Errorf("对端在信任网段内，应该认转发头里的地址，got=%q", got)
+	}
+}
+
+func TestValidate_代理网段写错直接起不来(t *testing.T) {
+	// gin 的 SetTrustedProxies 解析到出错为止、把已经解出来的留下，
+	// 于是前半段代理被信任、后半段被悄悄丢掉——日志里的 client_ip
+	// 一半真一半假，比起不来难查得多
+	c := DefaultConfig()
+	c.TrustedProxies = []string{"10.0.0.0/8", "10.0.0.0/33"}
+	if err := c.validate(); err == nil {
+		t.Fatal("网段写错了应该报错")
+	}
+
+	c.TrustedProxies = []string{"10.0.0.0/8", "192.168.1.1", "::1"}
+	if err := c.validate(); err != nil {
+		t.Errorf("这几个都是合法写法，不该报错: %v", err)
+	}
+}

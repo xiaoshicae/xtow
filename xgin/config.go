@@ -11,6 +11,8 @@ package xgin
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -69,6 +71,19 @@ type Config struct {
 	// 已经过期的 context，在途请求当场被切断。所以这里拦住它。
 	ShutdownTimeout time.Duration `yaml:"ShutdownTimeout"`
 
+	// TrustedProxies 信任哪些代理发来的 X-Forwarded-For / X-Real-IP。
+	// 默认一个都不信，此时 ClientIP() 就是对端地址本身。
+	//
+	// gin 自己的默认是「全都信」，那意味着任何人发一个
+	// X-Forwarded-For: 1.2.3.4 就能决定访问日志里的 client_ip 是什么——
+	// 日志可以被伪造，建在这个字段上的限流和审计也一起失效。
+	// 这种事不该靠使用者记得去关，所以这里默认关掉。
+	//
+	// 真的在负载均衡后面时，把它那一段网段写进来：
+	//
+	//	TrustedProxies: ["10.0.0.0/8"]
+	TrustedProxies []string `yaml:"TrustedProxies"`
+
 	// Mode Gin 的运行模式：release / debug / test。默认 release。
 	//
 	// 默认 release 而不是跟随 GIN_MODE：debug 模式会打印每一条路由、
@@ -109,7 +124,24 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("unknown Mode=%q, supported: release / debug / test", c.Mode)
 	}
+	// 网段写错了就直接起不来。gin 那边的行为是解析到出错为止、把已经解出来的
+	// 留下，于是前半段代理被信任、后半段被悄悄丢掉——日志里的 client_ip
+	// 一半真一半假，是比起不来难查得多的状态
+	for _, p := range c.TrustedProxies {
+		if !isIPOrCIDR(p) {
+			return fmt.Errorf("TrustedProxies contains an invalid address, want an IP or CIDR, got=%q", p)
+		}
+	}
 	return nil
+}
+
+// isIPOrCIDR 判断一段是不是合法的 IP 或者网段，与 gin 接受的写法一致
+func isIPOrCIDR(s string) bool {
+	if strings.Contains(s, "/") {
+		_, _, err := net.ParseCIDR(s)
+		return err == nil
+	}
+	return net.ParseIP(s) != nil
 }
 
 // tlsEnabled 是否配了 TLS

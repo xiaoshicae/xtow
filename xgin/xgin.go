@@ -94,6 +94,14 @@ func (g *XGin) build() {
 		e := gin.New()
 		e.HandleMethodNotAllowed = true // 不开的话，方法不对会返回 404 而不是 405
 
+		// 默认谁都不信。gin 的默认是全都信，于是任何人发一个
+		// X-Forwarded-For 就能决定访问日志里的 client_ip 是什么。
+		// 返回的错误只会在网段写错时出现，那是配置问题，留给 Start 的校验报
+		if err := e.SetTrustedProxies(g.conf().TrustedProxies); err != nil {
+			slog.Warn("xgin invalid TrustedProxies, trusting none", "error", err)
+			_ = e.SetTrustedProxies([]string{})
+		}
+
 		// 洋葱模型，自外向内：
 		//   LogScope → Trace → Log → Metric → Recover → 用户中间件 → handler
 		//
