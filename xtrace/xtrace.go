@@ -65,8 +65,8 @@ func New(ctx context.Context, cfg Config, procs ...sdktrace.SpanProcessor) (*Tra
 
 	if !cfg.Enable {
 		if len(procs) > 0 {
-			slog.Warn("xtrace 已关闭，注册的 SpanProcessor 收不到任何 Span",
-				"数量", len(procs), "开关", ConfigKey+".Enable")
+			slog.Warn("xtrace is disabled, the registered SpanProcessors will receive no spans",
+				"count", len(procs), "switch", ConfigKey+".Enable")
 		}
 		return &Tracing{TracerProvider: noop.NewTracerProvider(), Propagator: prop}, noopCloser{}, nil
 	}
@@ -83,7 +83,7 @@ func New(ctx context.Context, cfg Config, procs ...sdktrace.SpanProcessor) (*Tra
 	if cfg.Console {
 		exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 		if err != nil {
-			return nil, nil, fmt.Errorf("xtrace: 创建标准输出 exporter 失败: %w", err)
+			return nil, nil, fmt.Errorf("xtrace: create stdout exporter: %w", err)
 		}
 		// Simple 而非 Batch：本地调试要的是立刻看见，不是攒够了再刷
 		opts = append(opts, sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exp)))
@@ -129,7 +129,7 @@ func newResource(ctx context.Context) (*resource.Resource, error) {
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("xtrace: 构造 resource 失败: %w", err)
+		return nil, fmt.Errorf("xtrace: build resource: %w", err)
 	}
 	return res, nil
 }
@@ -170,7 +170,7 @@ func (c *providerCloser) Close() error {
 
 	detach()
 	if err := c.tp.Shutdown(ctx); err != nil {
-		return fmt.Errorf("xtrace: 关闭失败: %w", err)
+		return fmt.Errorf("xtrace: shutdown: %w", err)
 	}
 	return nil
 }
@@ -228,7 +228,7 @@ var (
 // 关闭时由本包统一 Shutdown，等待上限由 XTrace.ShutdownTimeout 控制。
 func AddSpanProcessor(sp sdktrace.SpanProcessor) {
 	if sp == nil {
-		panic("xtrace: SpanProcessor 不能为 nil")
+		panic("xtrace: SpanProcessor must not be nil")
 	}
 	mu.Lock()
 	defer mu.Unlock()

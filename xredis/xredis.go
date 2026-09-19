@@ -37,7 +37,7 @@ var pingInterval = time.Second
 // 收到退出信号就该当场放弃，而不是让进程卡在那里。
 func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xredis: 配置有误: %w", err)
+		return nil, nil, fmt.Errorf("xredis: invalid config: %w", err)
 	}
 
 	client := redis.NewClient(&redis.Options{
@@ -70,17 +70,17 @@ func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error
 
 	if cfg.Trace {
 		if err := redisotel.InstrumentTracing(client); err != nil {
-			return nil, nil, fmt.Errorf("xredis: 挂链路钩子失败: %w", err)
+			return nil, nil, fmt.Errorf("xredis: install tracing hook: %w", err)
 		}
 	}
 
 	if err := ping(ctx, client, cfg); err != nil {
 		// 不带上原始错误的全部内容：go-redis 的认证错误里可能回显配置
-		return nil, nil, fmt.Errorf("xredis: 连不上 %s: %w", cfg.Addr, err)
+		return nil, nil, fmt.Errorf("xredis: cannot reach %s: %w", cfg.Addr, err)
 	}
 
 	// 日志里只写地址和库号，密码不进日志——所以也就不需要脱敏
-	slog.Info("xredis 连接就绪", "地址", cfg.Addr, "库", cfg.DB, "最小空闲", cfg.MinIdleConns)
+	slog.Info("xredis connected", "addr", cfg.Addr, "db", cfg.DB, "min_idle_conns", cfg.MinIdleConns)
 
 	ok = true
 	return client, &clientCloser{client: client, addr: cfg.Addr}, nil
@@ -109,7 +109,7 @@ type clientCloser struct {
 
 func (c *clientCloser) Close() error {
 	if err := c.client.Close(); err != nil {
-		return fmt.Errorf("xredis: 关闭 %s 失败: %w", c.addr, err)
+		return fmt.Errorf("xredis: close %s failed: %w", c.addr, err)
 	}
 	return nil
 }
@@ -154,12 +154,12 @@ func initAll(ctx context.Context) (io.Closer, error) {
 	}
 
 	if names := reg.Names(); len(names) > 0 {
-		slog.Info("xredis 就绪", "实例", names)
+		slog.Info("xredis ready", "instances", names)
 	}
 	if metricEnabled(cfg.Clients) {
 		// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
 		if _, err := xmetric.RegisterAs(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
-			slog.Error("xredis 连接池指标注册失败", "错误", err)
+			slog.Error("xredis failed to register pool metrics", "error", err)
 		}
 	}
 	return closer, nil

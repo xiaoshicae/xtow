@@ -136,7 +136,7 @@ func collectorOf[T prometheus.Collector](key, name string, build func() T) T {
 	switch typed, ok := registered.(T); {
 	case err != nil:
 		// 只能记一笔：打点是运行期调用，这里没有「让启动失败」这个选项
-		slog.Error("xmetric 指标注册失败，通过它记录的值不会被导出", "指标", name, "错误", err)
+		slog.Error("xmetric metric registration failed, values recorded through it will not be exported", "metric", name, "error", err)
 	case ok:
 		c = typed
 	default:
@@ -199,6 +199,6 @@ func clearCollectors() int {
 
 // logNameConflict 同一个指标名被注册成了不同类型
 func logNameConflict(name string, registered prometheus.Collector) {
-	slog.Error("xmetric 指标名冲突，通过它记录的值不会被导出",
-		"指标", name, "已注册的类型", fmt.Sprintf("%T", registered))
+	slog.Error("xmetric metric name conflict, values recorded through it will not be exported",
+		"metric", name, "registered_type", fmt.Sprintf("%T", registered))
 }

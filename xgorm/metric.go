@@ -19,21 +19,21 @@ type poolMetric struct {
 
 // poolMetrics 指标表，名字按 Prometheus 约定带基准单位
 var poolMetrics = []poolMetric{
-	{"db_connections_open", "当前已建立的连接数（使用中 + 空闲）", prometheus.GaugeValue,
+	{"db_connections_open", "Open connections right now (in use + idle)", prometheus.GaugeValue,
 		func(s sql.DBStats) float64 { return float64(s.OpenConnections) }},
-	{"db_connections_in_use", "当前正在使用的连接数", prometheus.GaugeValue,
+	{"db_connections_in_use", "Connections currently in use", prometheus.GaugeValue,
 		func(s sql.DBStats) float64 { return float64(s.InUse) }},
-	{"db_connections_idle", "当前空闲的连接数", prometheus.GaugeValue,
+	{"db_connections_idle", "Idle connections right now", prometheus.GaugeValue,
 		func(s sql.DBStats) float64 { return float64(s.Idle) }},
-	{"db_connections_max_open", "连接数上限，0 表示不限制", prometheus.GaugeValue,
+	{"db_connections_max_open", "Connection limit, 0 means unlimited", prometheus.GaugeValue,
 		func(s sql.DBStats) float64 { return float64(s.MaxOpenConnections) }},
-	{"db_connections_wait_total", "累计等待连接的次数", prometheus.CounterValue,
+	{"db_connections_wait_total", "Total number of waits for a connection", prometheus.CounterValue,
 		func(s sql.DBStats) float64 { return float64(s.WaitCount) }},
-	{"db_connections_wait_duration_seconds_total", "累计等待连接的时长", prometheus.CounterValue,
+	{"db_connections_wait_duration_seconds_total", "Total time spent waiting for a connection", prometheus.CounterValue,
 		func(s sql.DBStats) float64 { return s.WaitDuration.Seconds() }},
-	{"db_connections_closed_max_idle_total", "因超过空闲上限而关闭的连接累计数", prometheus.CounterValue,
+	{"db_connections_closed_max_idle_total", "Total connections closed for exceeding the idle limit", prometheus.CounterValue,
 		func(s sql.DBStats) float64 { return float64(s.MaxIdleTimeClosed) }},
-	{"db_connections_closed_max_lifetime_total", "因超过存活时长而关闭的连接累计数", prometheus.CounterValue,
+	{"db_connections_closed_max_lifetime_total", "Total connections closed for exceeding their lifetime", prometheus.CounterValue,
 		func(s sql.DBStats) float64 { return float64(s.MaxLifetimeClosed) }},
 }
 

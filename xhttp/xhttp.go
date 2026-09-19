@@ -32,7 +32,7 @@ const fallbackTimeout = 30 * time.Second
 // 返回的 io.Closer 释放连接池里的空闲连接。
 func New(cfg Config) (*resty.Client, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xhttp: 配置有误: %w", err)
+		return nil, nil, fmt.Errorf("xhttp: invalid config: %w", err)
 	}
 
 	raw := &http.Client{Transport: buildTransport(cfg), Timeout: cfg.Timeout}
@@ -81,7 +81,7 @@ func buildTransport(cfg Config) http.RoundTripper {
 func tunedTransport(cfg Config) http.RoundTripper {
 	t, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		slog.Warn("xhttp 无法调整连接池参数", "http.DefaultTransport 的类型", fmt.Sprintf("%T", http.DefaultTransport))
+		slog.Warn("xhttp cannot tune the connection pool", "default_transport_type", fmt.Sprintf("%T", http.DefaultTransport))
 		return http.DefaultTransport
 	}
 
@@ -121,8 +121,8 @@ func retryOnlyIdempotent(resp *resty.Response, err error) bool {
 	if _, ok := idempotentMethods[method]; ok {
 		return true
 	}
-	slog.Debug("xhttp 跳过非幂等方法的重试",
-		"方法", method, "要允许就配", ConfigKey+".RetryOnlyIdempotent=false")
+	slog.Debug("xhttp skipped retrying a non-idempotent method",
+		"method", method, "to_allow_set", ConfigKey+".RetryOnlyIdempotent=false")
 	return false
 }
 
@@ -207,7 +207,7 @@ func initClient(context.Context) (io.Closer, error) {
 	rawOwned = client.GetClient()
 	mu.Unlock()
 
-	slog.Info("xhttp 就绪", "超时", cfg.Timeout, "每主机空闲连接", cfg.MaxIdleConnsPerHost, "重试", cfg.RetryCount)
+	slog.Info("xhttp ready", "timeout", cfg.Timeout, "max_idle_conns_per_host", cfg.MaxIdleConnsPerHost, "retries", cfg.RetryCount)
 	return &resetCloser{inner: closer}, nil
 }
 

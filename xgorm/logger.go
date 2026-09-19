@@ -64,11 +64,11 @@ func (l *gormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 	switch {
 	case err != nil && l.level >= logger.Error && !l.skipErr(err):
 		sql, rows := fc()
-		slog.ErrorContext(ctx, "SQL 执行失败", attrs(sql, rows, elapsed, "错误", err)...)
+		slog.ErrorContext(ctx, "SQL failed", attrs(sql, rows, elapsed, "error", err)...)
 
 	case l.slowThreshold > 0 && elapsed > l.slowThreshold && l.level >= logger.Warn:
 		sql, rows := fc()
-		slog.WarnContext(ctx, "慢 SQL", attrs(sql, rows, elapsed, "阈值", l.slowThreshold)...)
+		slog.WarnContext(ctx, "slow SQL", attrs(sql, rows, elapsed, "threshold", l.slowThreshold)...)
 
 	case l.level >= logger.Info:
 		sql, rows := fc()
@@ -83,10 +83,10 @@ func (l *gormLogger) skipErr(err error) bool {
 
 func attrs(sql string, rows int64, elapsed time.Duration, extra ...any) []any {
 	out := make([]any, 0, 6+len(extra))
-	out = append(out, "sql", sql, "耗时", elapsed)
+	out = append(out, "sql", sql, "elapsed", elapsed)
 	if rows >= 0 {
 		// -1 是 GORM 表示「行数未知」的约定，写成 -1 会被误读成真有 -1 行
-		out = append(out, "影响行数", rows)
+		out = append(out, "rows_affected", rows)
 	}
 	return append(out, extra...)
 }

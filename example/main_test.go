@@ -138,7 +138,7 @@ XMetric:
 		// 同一档内的相对顺序是登记顺序（即 import 路径字典序），不是框架的承诺
 		// 同一档内部不保证顺序，所以这里按档分组比
 		wantInit := []string{"XLog", "XMetric", "XTrace", "XCache", "XHttp"}
-		if got := extract(framework.String(), "初始化"); !equal(got, wantInit) {
+		if got := extract(framework.String(), "initializing"); !equal(got, wantInit) {
 			t.Errorf("初始化顺序=%v want=%v", got, wantInit)
 		}
 	})
@@ -146,7 +146,7 @@ XMetric:
 	t.Run("关闭严格逆序", func(t *testing.T) {
 		// 日志最后关，所以每个组件的关闭日志都写得出去
 		wantStop := []string{"XHttp", "XCache", "XTrace", "XMetric", "XLog"}
-		if got := extract(framework.String(), "关闭"); !equal(got, wantStop) {
+		if got := extract(framework.String(), "closing"); !equal(got, wantStop) {
 			t.Errorf("关闭顺序=%v want=%v", got, wantStop)
 		}
 	})
@@ -189,7 +189,7 @@ func extract(log, action string) []string {
 		if !strings.Contains(line, "msg="+action) {
 			continue
 		}
-		if _, after, ok := strings.Cut(line, "组件="); ok {
+		if _, after, ok := strings.Cut(line, "component="); ok {
 			out = append(out, strings.Fields(after)[0])
 		}
 	}
@@ -335,7 +335,7 @@ XGin:
 	})
 
 	t.Run("日志带上链路标识", func(t *testing.T) {
-		line := findLog(t, dir, "收到请求")
+		line := findLog(t, dir, "request received")
 		if line["trace_id"] != traceID {
 			t.Errorf("业务日志的 trace_id 应与响应头一致，日志=%v 响应头=%s", line["trace_id"], traceID)
 		}
@@ -343,8 +343,8 @@ XGin:
 
 	t.Run("访问日志自动记下来", func(t *testing.T) {
 		// 业务代码一行都没写，访问日志是内置中间件记的
-		line := findLog(t, dir, "请求完成")
-		if line["路由"] != "/hello" || line["状态"] != float64(200) {
+		line := findLog(t, dir, "request completed")
+		if line["route"] != "/hello" || line["status"] != float64(200) {
 			t.Errorf("访问日志不对，got=%v", line)
 		}
 	})

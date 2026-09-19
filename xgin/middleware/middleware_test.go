@@ -119,10 +119,10 @@ func TestRecover_兜住panic并返回500(t *testing.T) {
 	if len(got) == 0 || got[0]["level"] != "ERROR" {
 		t.Fatalf("应记一条 error 日志，got=%v", got)
 	}
-	if got[0]["栈"] == nil || !strings.Contains(got[0]["栈"].(string), "middleware_test.go") {
+	if got[0]["stack"] == nil || !strings.Contains(got[0]["stack"].(string), "middleware_test.go") {
 		t.Errorf("应带上栈信息，got=%v", got[0])
 	}
-	if got[0]["路径"] != "/hello" {
+	if got[0]["path"] != "/hello" {
 		t.Errorf("应带上请求路径，got=%v", got[0])
 	}
 }
@@ -192,16 +192,16 @@ func TestLog_记下关键字段(t *testing.T) {
 	}
 	l := got[0]
 	// 路由用模板而不是真实路径：/hello/42 和 /hello/43 是同一个接口
-	if l["路由"] != "/hello/:id" {
-		t.Errorf("路由应是模板，got=%v", l["路由"])
+	if l["route"] != "/hello/:id" {
+		t.Errorf("路由应是模板，got=%v", l["route"])
 	}
-	if l["路径"] != "/hello/42" {
-		t.Errorf("路径应是真实路径，got=%v", l["路径"])
+	if l["path"] != "/hello/42" {
+		t.Errorf("路径应是真实路径，got=%v", l["path"])
 	}
-	if l["状态"] != float64(201) || l["方法"] != "GET" {
+	if l["status"] != float64(201) || l["method"] != "GET" {
 		t.Errorf("状态和方法不对，got=%v", l)
 	}
-	if l["耗时"] == nil || l["客户端"] == nil {
+	if l["elapsed"] == nil || l["client_ip"] == nil {
 		t.Errorf("应记耗时和客户端，got=%v", l)
 	}
 }
@@ -220,7 +220,7 @@ func TestLog_跳过指定路径(t *testing.T) {
 	}
 
 	got := lines()
-	if len(got) != 1 || got[0]["路径"] != "/other" {
+	if len(got) != 1 || got[0]["path"] != "/other" {
 		t.Errorf("只有 /other 该被记下来，got=%v", got)
 	}
 }
@@ -233,7 +233,7 @@ func TestLog_默认不记body(t *testing.T) {
 	serve(t, req, []gin.HandlerFunc{Log()}, func(c *gin.Context) { c.String(200, "ok") })
 
 	got := lines()[0]
-	if _, has := got["请求体"]; has {
+	if _, has := got["request_body"]; has {
 		t.Errorf("默认不该记请求体，got=%v", got)
 	}
 }
@@ -252,14 +252,14 @@ func TestLog_打开后记body且脱敏(t *testing.T) {
 	})
 
 	got := lines()[0]
-	reqBody, _ := got["请求体"].(string)
+	reqBody, _ := got["request_body"].(string)
 	if strings.Contains(reqBody, secret) {
 		t.Errorf("请求体里的密码应被遮掉，got=%v", reqBody)
 	}
 	if !strings.Contains(reqBody, "alice") {
 		t.Errorf("非敏感字段应保留，got=%v", reqBody)
 	}
-	respBody, _ := got["响应体"].(string)
+	respBody, _ := got["response_body"].(string)
 	if strings.Contains(respBody, secret) {
 		t.Errorf("响应体里的令牌也该被遮掉，got=%v", respBody)
 	}
@@ -271,7 +271,7 @@ func TestLog_请求头脱敏(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+secret)
 	serve(t, req, []gin.HandlerFunc{Log()}, func(c *gin.Context) { c.Status(200) })
 
-	if h, _ := lines()[0]["请求头"].(string); strings.Contains(h, secret) {
+	if h, _ := lines()[0]["request_headers"].(string); strings.Contains(h, secret) {
 		t.Errorf("请求头里的凭证应被遮掉，got=%v", h)
 	}
 }
@@ -283,7 +283,7 @@ func TestLog_不读文件上传的body(t *testing.T) {
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
 	serve(t, req, []gin.HandlerFunc{Log(WithBody(true, false))}, func(c *gin.Context) { c.Status(200) })
 
-	if b, _ := lines()[0]["请求体"].(string); !strings.Contains(b, "已省略") {
+	if b, _ := lines()[0]["request_body"].(string); !strings.Contains(b, "omitted") {
 		t.Errorf("文件上传的 body 不该被读进日志，got=%v", b)
 	}
 }

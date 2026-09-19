@@ -39,7 +39,7 @@ func resolveDSN(c ClientConfig) (string, connInfo, error) {
 	case DriverPostgres:
 		return resolvePostgres(c)
 	default:
-		return "", connInfo{}, fmt.Errorf("不认识的 Driver=%q", c.Driver)
+		return "", connInfo{}, fmt.Errorf("unknown Driver=%q", c.Driver)
 	}
 }
 
@@ -48,7 +48,7 @@ func resolveMySQL(c ClientConfig) (string, connInfo, error) {
 	cfg, err := mysqldriver.ParseDSN(c.DSN)
 	if err != nil {
 		// 不回传驱动的错误：它会把 DSN 片段带在错误信息里，而错误信息会被记下来
-		return "", connInfo{}, fmt.Errorf("DSN 解析失败，检查 %s 的格式（错误详情已省略，避免凭证进日志）", ConfigKey)
+		return "", connInfo{}, fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
 
 	if cfg.Timeout == 0 {
@@ -115,7 +115,7 @@ func injectPostgresURL(dsn string, injects map[string]string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		// 同样不回传原始错误：url.Parse 的错误里带着整串 DSN
-		return "", fmt.Errorf("DSN 解析失败，检查 %s 的格式（错误详情已省略，避免凭证进日志）", ConfigKey)
+		return "", fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
 	q := u.Query()
 	for _, k := range slices.Sorted(maps.Keys(injects)) {
@@ -235,7 +235,7 @@ func millis(d time.Duration) string {
 
 // logConn 记一条建连日志，只写确定不含凭证的字段
 func logConn(info connInfo, c ClientConfig) {
-	slog.Info("xgorm 连接就绪",
-		"驱动", info.Driver, "地址", info.Addr, "库", info.DB,
-		"最大连接数", c.MaxOpenConns, "最大空闲", c.MaxIdleConns)
+	slog.Info("xgorm connected",
+		"driver", info.Driver, "addr", info.Addr, "db", info.DB,
+		"max_open_conns", c.MaxOpenConns, "max_idle_conns", c.MaxIdleConns)
 }

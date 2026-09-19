@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -215,13 +216,20 @@ func TestAddSensitiveFields(t *testing.T) {
 	mustNotLeak(t, RedactBody([]byte(body), "application/json"))
 }
 
+// headerLog 把脱敏后的请求头渲染成它在日志里的样子
+func headerLog(h http.Header) string {
+	var buf strings.Builder
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("req", "请求头", RedactHeaders(h))
+	return buf.String()
+}
+
 func TestRedactHeaders(t *testing.T) {
 	h := http.Header{
 		"Authorization": {"Bearer " + secret},
 		"Cookie":        {"session=" + secret},
 		"Content-Type":  {"application/json"},
 	}
-	got := RedactHeaders(h)
+	got := headerLog(h)
 	mustNotLeak(t, got)
 	if !strings.Contains(got, "application/json") {
 		t.Errorf("非敏感头应保留，got=%s", got)
@@ -232,10 +240,41 @@ func TestRedactHeaders(t *testing.T) {
 	}
 }
 
+func TestRedactHeaders_在日志里是嵌套对象而不是转义过的字符串(t *testing.T) {
+	// 交出序列化好的字符串的话，slog 会把它当普通字符串字段再转义一遍，
+	// 日志里就是 "请求头":"{\"X-A\":\"1\"}" —— 检索时要先解一层字符串
+	got := headerLog(http.Header{"X-A": {"1"}})
+	if strings.Contains(got, `\"`) {
+		t.Errorf("不该出现双重转义，got=%s", got)
+	}
+	if !strings.Contains(got, `"请求头":{"X-A":"1"}`) {
+		t.Errorf("应当是一个嵌套对象，got=%s", got)
+	}
+}
+
+func TestRedactHeaders_多值头拼成一个字符串(t *testing.T) {
+	// 同一个字段名忽而是字符串忽而是数组，日志系统建索引时会直接拒收
+	got := headerLog(http.Header{"X-Multi": {"a", "b"}})
+	if !strings.Contains(got, `"X-Multi":"a, b"`) {
+		t.Errorf("多值应拼成一个字符串，got=%s", got)
+	}
+}
+
+func TestRedactHeaders_字段按key排序(t *testing.T) {
+	// map 遍历顺序是随机的，不排序的话每行日志的字段顺序都不一样
+	h := http.Header{"X-C": {"3"}, "X-A": {"1"}, "X-B": {"2"}}
+	for i := 0; i < 20; i++ {
+		got := headerLog(h)
+		if !strings.Contains(got, `{"X-A":"1","X-B":"2","X-C":"3"}`) {
+			t.Fatalf("字段顺序应当稳定，got=%s", got)
+		}
+	}
+}
+
 func TestRedactHeaders_Cookie默认就遮(t *testing.T) {
 	// Cookie 里几乎总有会话标识，等价于凭证
-	mustNotLeak(t, RedactHeaders(http.Header{"Cookie": {"sid=" + secret}}))
-	mustNotLeak(t, RedactHeaders(http.Header{"Set-Cookie": {"sid=" + secret}}))
+	mustNotLeak(t, headerLog(http.Header{"Cookie": {"sid=" + secret}}))
+	mustNotLeak(t, headerLog(http.Header{"Set-Cookie": {"sid=" + secret}}))
 }
 
 func TestAddSensitiveHeaders(t *testing.T) {
@@ -248,17 +287,18 @@ func TestAddSensitiveHeaders(t *testing.T) {
 	t.Cleanup(reset)
 
 	h := http.Header{"X-Custom-Secret": {secret}}
-	if !strings.Contains(RedactHeaders(h), secret) {
+	if !strings.Contains(headerLog(h), secret) {
 		t.Fatal("还没添加就不该被遮")
 	}
 	AddSensitiveHeaders("x-custom-secret")
-	mustNotLeak(t, RedactHeaders(h))
+	mustNotLeak(t, headerLog(h))
 }
 
-func TestRedactHeaders_复用的map不串味(t *testing.T) {
-	// headerPool 复用 map，忘了清空的话上一次请求的头会漏进下一条日志
-	first := RedactHeaders(http.Header{"X-One": {"1"}})
-	second := RedactHeaders(http.Header{"X-Two": {"2"}})
+func TestRedactHeaders_两次之间不串味(t *testing.T) {
+	// 回归用例：早先的实现从池子里取一个 map 复用，忘了清空的话
+	// 上一次请求的头会漏进下一条日志
+	first := headerLog(http.Header{"X-One": {"1"}})
+	second := headerLog(http.Header{"X-Two": {"2"}})
 	if strings.Contains(second, "X-One") {
 		t.Errorf("上一次请求的头漏到了这一次：first=%s second=%s", first, second)
 	}

@@ -59,17 +59,17 @@ func Recover(handle gin.RecoveryFunc) gin.HandlerFunc {
 			broken := isBrokenPipe(err)
 			ctx := c.Request.Context()
 			if broken {
-				slog.ErrorContext(ctx, "连接已断开", "错误", err)
+				slog.ErrorContext(ctx, "connection broken", "error", err)
 				_ = c.Error(err.(error)) //nolint:errcheck // isBrokenPipe 保证它是 *net.OpError
 				c.Abort()
 				return
 			}
 
-			slog.ErrorContext(ctx, "请求处理中 panic",
-				"错误", err,
-				"栈", stack(),
-				"路径", c.Request.URL.Path,
-				"方法", c.Request.Method)
+			slog.ErrorContext(ctx, "panic while handling request",
+				"error", err,
+				"stack", stack(),
+				"path", c.Request.URL.Path,
+				"method", c.Request.Method)
 
 			if c.Writer.Written() {
 				// 响应已经开始往外写了，再改状态码只会得到一个半截的响应

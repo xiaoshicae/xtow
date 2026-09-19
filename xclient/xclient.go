@@ -95,10 +95,10 @@ func (r *Registry[T]) Publish(items map[string]T) {
 func (r *Registry[T]) missing(want string) string {
 	got := r.Names()
 	if len(got) == 0 {
-		return fmt.Sprintf("%s: 没有名为 %q 的实例，而且一个实例都没配——检查配置里的 %s 块",
+		return fmt.Sprintf("%s: no instance named %q, and none is configured at all — check the %s block in the config",
 			r.module, want, r.key)
 	}
-	return fmt.Sprintf("%s: 没有名为 %q 的实例，已配置的有 [%s]",
+	return fmt.Sprintf("%s: no instance named %q, configured ones are [%s]",
 		r.module, want, strings.Join(got, " "))
 }
 
@@ -136,12 +136,12 @@ func Build[C, T any](ctx context.Context, r *Registry[T], cfgs map[string]C,
 	for _, name := range sortedKeys(cfgs) {
 		if err := ctx.Err(); err != nil {
 			closeAll(closers)
-			return nil, fmt.Errorf("建实例 %q 之前收到退出信号: %w", name, err)
+			return nil, fmt.Errorf("shutdown signal received before building instance %q: %w", name, err)
 		}
 		v, closer, err := new(ctx, cfgs[name])
 		if err != nil {
 			closeAll(closers)
-			return nil, fmt.Errorf("实例 %q: %w", name, err)
+			return nil, fmt.Errorf("instance %q: %w", name, err)
 		}
 		built[name] = v
 		closers = append(closers, closer)

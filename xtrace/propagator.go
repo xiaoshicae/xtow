@@ -65,8 +65,8 @@ func NewHeaderPropagator(globalHeaders []string, rules []ForwardHeaderRule) (*He
 	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
-		return nil, fmt.Errorf("xtrace: header %s 同时出现在 ForwardHeaders 和 ForwardHeaderRules 里，"+
-			"前者发给所有域名、后者只发给指定域名，二者矛盾：删掉其中一处",
+		return nil, fmt.Errorf("xtrace: header %s appears in both ForwardHeaders and ForwardHeaderRules; "+
+			"the former sends it to every domain, the latter only to the listed ones — remove one of them",
 			strings.Join(conflicts, ", "))
 	}
 

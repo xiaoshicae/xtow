@@ -32,11 +32,11 @@ const (
 func (d Dependency) String() string {
 	switch d {
 	case Strong:
-		return "强依赖"
+		return "strong"
 	case Weak:
-		return "弱依赖"
+		return "weak"
 	default:
-		return "未知"
+		return "unknown"
 	}
 }
 
@@ -75,7 +75,7 @@ type StepError struct {
 }
 
 func (e *StepError) Error() string {
-	return fmt.Sprintf("步骤 %q（%s）失败: %v", e.Processor, e.Dependency, e.Err)
+	return fmt.Sprintf("step %q (%s dependency) failed: %v", e.Processor, e.Dependency, e.Err)
 }
 
 func (e *StepError) Unwrap() error { return e.Err }
@@ -106,16 +106,16 @@ func (r *Result) Success() bool { return r.Err == nil }
 func (r *Result) String() string {
 	if r.Err == nil {
 		if len(r.Skipped) > 0 {
-			return fmt.Sprintf("流程成功，跳过 %d 个弱依赖失败", len(r.Skipped))
+			return fmt.Sprintf("flow succeeded, %d weak step(s) skipped after failing", len(r.Skipped))
 		}
-		return "流程成功"
+		return "flow succeeded"
 	}
-	msg := fmt.Sprintf("流程失败: %v", r.Err)
+	msg := fmt.Sprintf("flow failed: %v", r.Err)
 	if r.Rolled {
-		msg += "，已回滚"
+		msg += ", rolled back"
 	}
 	if n := len(r.RollbackErrors); n > 0 {
-		msg += fmt.Sprintf("，其中 %d 步回滚失败", n)
+		msg += fmt.Sprintf(", %d step(s) failed to roll back", n)
 	}
 	return msg
 }
@@ -135,7 +135,7 @@ type Flow[T any] struct {
 func New[T any](name string, steps ...Processor[T]) *Flow[T] {
 	for i, p := range steps {
 		if p == nil {
-			panic(fmt.Sprintf("xflow: 流程 %q 的第 %d 步是 nil", name, i))
+			panic(fmt.Sprintf("xflow: step %d of flow %q is nil", i, name))
 		}
 	}
 	return &Flow[T]{name: name, steps: steps}
@@ -163,7 +163,7 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 	for _, p := range f.steps {
 		// 调用方已经不等了，就不再启动新步骤；但已经做完的仍要回滚
 		if err := ctx.Err(); err != nil {
-			res.Err = fmt.Errorf("xflow: 流程 %q 在步骤 %q 之前被取消: %w", f.name, p.Name(), err)
+			res.Err = fmt.Errorf("xflow: flow %q canceled before step %q: %w", f.name, p.Name(), err)
 			f.rollback(ctx, data, done, res, m)
 			f.notifyFlow(ctx, m, res, start)
 			return res
@@ -215,7 +215,7 @@ func (f *Flow[T]) rollback(ctx context.Context, data T, done []Processor[T], res
 			res.RollbackErrors = append(res.RollbackErrors, &StepError{
 				Processor:  p.Name(),
 				Dependency: p.Dependency(),
-				Err:        fmt.Errorf("回滚预算已耗尽，这一步没能执行: %w", err),
+				Err:        fmt.Errorf("rollback budget exhausted, this step never ran: %w", err),
 			})
 			continue
 		}
@@ -239,7 +239,7 @@ func (f *Flow[T]) rollback(ctx context.Context, data T, done []Processor[T], res
 func safeProcess[T any](ctx context.Context, p Processor[T], data T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("xflow: 步骤 %q panic: %v\n%s", p.Name(), r, debug.Stack())
+			err = fmt.Errorf("xflow: step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
 		}
 	}()
 	return p.Process(ctx, data)
@@ -251,7 +251,7 @@ func safeProcess[T any](ctx context.Context, p Processor[T], data T) (err error)
 func safeRollback[T any](ctx context.Context, p Processor[T], data T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("xflow: 步骤 %q 回滚 panic: %v\n%s", p.Name(), r, debug.Stack())
+			err = fmt.Errorf("xflow: rollback of step %q panicked: %v\n%s", p.Name(), r, debug.Stack())
 		}
 	}()
 	return p.Rollback(ctx, data)

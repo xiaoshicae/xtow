@@ -186,7 +186,7 @@ func TestLogConn_不打印凭证(t *testing.T) {
 	if strings.Contains(blob, secret) {
 		t.Errorf("建连日志里出现了密码：%v", got[0])
 	}
-	if got[0]["地址"] != "h:3306" || got[0]["库"] != "app" {
+	if got[0]["addr"] != "h:3306" || got[0]["db"] != "app" {
 		t.Errorf("该写出地址和库名，否则排查不了连的是谁，got=%v", got[0])
 	}
 }

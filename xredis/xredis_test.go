@@ -107,7 +107,7 @@ func TestNew_密码不进日志(t *testing.T) {
 		}
 	}
 	got := lines()
-	if len(got) == 0 || got[0]["地址"] != c.Addr {
+	if len(got) == 0 || got[0]["addr"] != c.Addr {
 		t.Errorf("该写出地址，否则排查不了连的是谁，got=%v", got)
 	}
 }

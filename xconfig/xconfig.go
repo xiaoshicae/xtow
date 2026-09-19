@@ -79,9 +79,9 @@ func DecodeClients[C any](n *yaml.Node, defaults func() C) (map[string]C, error)
 	// 交给解码器的话，实例里一个字段拼错（Clients.default.DSNN）报的也是
 	// 「不能混用」——而那份配置根本没混用，使用者会照着这句话去改一个没问题的地方。
 	if stray := keysExcept(n, clientsKey); len(stray) > 0 {
-		return nil, fmt.Errorf("单实例和多实例两种写法不能混用：写了 %s 之后，%s 就没有归属了——"+
-			"把它们移进某个实例里，或者删掉 %s 改用单实例写法",
-			clientsKey, strings.Join(stray, "、"), clientsKey)
+		return nil, fmt.Errorf("cannot mix the single- and multi-instance forms: with %s present, "+
+			"%s belong to no instance — move them into one, or drop %s and use the single-instance form",
+			clientsKey, strings.Join(stray, ", "), clientsKey)
 	}
 
 	var multi struct {
@@ -91,7 +91,7 @@ func DecodeClients[C any](n *yaml.Node, defaults func() C) (map[string]C, error)
 		return nil, err
 	}
 	if len(multi.Clients) == 0 {
-		return nil, fmt.Errorf("%s 是空的：要么写上实例，要么整块删掉", clientsKey)
+		return nil, fmt.Errorf("%s is empty: either list instances under it, or remove the whole block", clientsKey)
 	}
 	return multi.Clients, nil
 }

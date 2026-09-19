@@ -22,7 +22,7 @@ type Cache = ristretto.Cache[string, any]
 // New 按配置建一个缓存实例，不触碰任何全局变量
 func New(cfg ClientConfig) (*Cache, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xcache: 配置有误: %w", err)
+		return nil, nil, fmt.Errorf("xcache: invalid config: %w", err)
 	}
 
 	c, err := ristretto.NewCache(&ristretto.Config[string, any]{
@@ -31,7 +31,7 @@ func New(cfg ClientConfig) (*Cache, io.Closer, error) {
 		BufferItems: cfg.BufferItems,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("xcache: 建缓存失败: %w", err)
+		return nil, nil, fmt.Errorf("xcache: create cache: %w", err)
 	}
 	return c, closerFunc(c.Close), nil
 }
@@ -124,7 +124,7 @@ func initAll(ctx context.Context) (io.Closer, error) {
 		return nil, err
 	}
 	if names := reg.Names(); len(names) > 0 {
-		slog.Info("xcache 就绪", "实例", names)
+		slog.Info("xcache ready", "instances", names)
 	}
 	return closer, nil
 }

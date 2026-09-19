@@ -34,11 +34,11 @@ func routes(e *gin.Engine) {
 
 		// 业务代码只认识标准库 slog 和原生 gin，不认识本框架的包。
 		// 日志会自动带上这次请求的 trace_id
-		slog.InfoContext(c.Request.Context(), "收到请求", "路径", c.Request.URL.Path)
+		slog.InfoContext(c.Request.Context(), "request received", "path", c.Request.URL.Path)
 		c.JSON(http.StatusOK, gin.H{"msg": "hello"})
 	})
 
 	e.GET("/boom", func(c *gin.Context) {
-		panic("故意炸一个，看 recover 中间件")
+		panic("deliberate panic, to exercise the recover middleware")
 	})
 }

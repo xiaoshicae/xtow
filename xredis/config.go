@@ -143,10 +143,10 @@ func (c *ClientConfig) UnmarshalYAML(n *yaml.Node) error {
 // validate 检查配置本身说不通的地方，在建连之前就失败
 func (c ClientConfig) validate() error {
 	if c.Addr == "" {
-		return fmt.Errorf("Addr 不能为空")
+		return fmt.Errorf("Addr must not be empty")
 	}
 	if c.DB < 0 {
-		return fmt.Errorf("DB 不能为负数，got=%d", c.DB)
+		return fmt.Errorf("DB must not be negative, got=%d", c.DB)
 	}
 	return nil
 }

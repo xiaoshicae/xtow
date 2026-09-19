@@ -135,7 +135,7 @@ func TestShortcut_同名不同类型不静默(t *testing.T) {
 	CounterInc("dup_name")
 	GaugeSet("dup_name", 5)
 
-	if !strings.Contains(logged.String(), "指标名冲突") {
+	if !strings.Contains(logged.String(), "metric name conflict") {
 		t.Errorf("同名不同类型应当告警，实际日志=%q", logged.String())
 	}
 	if out := dump(t, m); !strings.Contains(out, "dup_name 1") {

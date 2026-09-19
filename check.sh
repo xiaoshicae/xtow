@@ -77,7 +77,31 @@ done
 [ -z "$missing" ] || fail "这些配置字段没写进 docs/config.md：$missing"
 echo "✓ 配置字段都写进文档了"
 
-# ---- 8. 基本卫生 ----
+# ---- 8. 运行期字符串必须是英文 ----
+# 注释写给读这份代码的人，用中文；但错误和日志会落进使用者的系统——
+# 进他们的告警、他们的日志检索、他们的 issue。中文的日志字段名还会变成
+# JSON 的 key，让日志平台的索引和看板直接对不上。
+zh=$(python3 - <<'PY_EOF'
+import re, glob
+zh = re.compile(r'[\u4e00-\u9fff]')
+strlit = re.compile(r'"(?:[^"\\]|\\.)*"')
+for f in sorted(glob.glob('**/*.go', recursive=True)):
+    if f.endswith('_test.go'):
+        continue
+    for i, line in enumerate(open(f, encoding='utf-8'), 1):
+        if line.lstrip().startswith('//'):
+            continue
+        for m in strlit.finditer(line.split('//')[0]):
+            if zh.search(m.group()):
+                print(f"{f}:{i}")
+                break
+PY_EOF
+)
+[ -z "$zh" ] || fail "这些地方的运行期字符串还是中文（错误和日志要用英文）：
+$zh"
+echo "✓ 运行期字符串都是英文"
+
+# ---- 9. 基本卫生 ----
 [ -z "$(gofmt -l .)" ] || fail "有文件未格式化：$(gofmt -l .)"
 for m in $modules; do
   (cd "$m" && GOWORK=off go vet ./... >/dev/null 2>&1) || fail "$m go vet 未通过"

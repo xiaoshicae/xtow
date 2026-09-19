@@ -43,7 +43,7 @@ func Run(r Runnable, opts ...Option) error {
 	// context，服务当场被切断，后面每个组件的关闭也都在超时状态下跑。
 	// 让它在做任何事之前就失败，好过退出时才发现没有优雅退出这回事
 	if o.stopTimeout <= 0 {
-		return fmt.Errorf("xtow: 停止预算必须大于 0（0 不是不限时，是一点都不等），got=%v", o.stopTimeout)
+		return fmt.Errorf("xtow: stop budget must be > 0 (0 is not unlimited, it is no wait at all), got=%v", o.stopTimeout)
 	}
 
 	// 退出信号在做任何事之前就接管，配置加载和初始化都在它的保护之内。
@@ -72,11 +72,11 @@ func Run(r Runnable, opts ...Option) error {
 		// 即便 initAll 带回了错误也不往上报——被取消的建连必然失败，
 		// 那是按要求退出的结果而不是故障。报上去的话，每次滚动更新
 		// 撞上这个窗口都会在面板上留一条「启动失败」。
-		attrs := []any{"已就绪组件数", len(closers)}
+		attrs := []any{"ready_components", len(closers)}
 		if err != nil {
-			attrs = append(attrs, "被中断的初始化", err)
+			attrs = append(attrs, "interrupted_init", err)
 		}
-		o.log().Info("初始化期间收到退出信号，不启动服务", attrs...)
+		o.log().Info("shutdown signal received during init, not starting the server", attrs...)
 		return shutdown(closers, o)
 	case err != nil:
 		return errors.Join(err, shutdown(closers, o))
@@ -111,7 +111,7 @@ func Run(r Runnable, opts ...Option) error {
 		case e := <-runErr:
 			first = errors.Join(first, e)
 		case <-stopCtx.Done():
-			o.log().Warn("服务没有在停止预算内退出，继续关闭其余组件", "预算", o.stopTimeout)
+			o.log().Warn("server did not exit within the stop budget, closing the rest anyway", "budget", o.stopTimeout)
 		}
 	}
 
@@ -133,16 +133,16 @@ func loadConfigInto(list []registry.Component, o options) error {
 	}
 
 	if path == "" {
-		o.log().Warn("未找到配置文件，全部使用默认值",
-			"查找过的位置", config.SearchPaths,
-			"也可用", "--"+config.ArgKey+"=<path> 或 "+config.EnvKey)
+		o.log().Warn("no config file found, using defaults for everything",
+			"searched", config.SearchPaths,
+			"or_use", "--"+config.ArgKey+"=<path> or "+config.EnvKey)
 		return nil
 	}
 	if !xutil.FileExist(path) {
-		return fmt.Errorf("xtow: 指定的配置文件不存在: %s", path)
+		return fmt.Errorf("xtow: config file does not exist: %s", path)
 	}
 
-	o.log().Info("加载配置", "文件", path)
+	o.log().Info("loading config", "file", path)
 	return config.Load(path, list)
 }
 
@@ -161,15 +161,15 @@ func initAll(ctx context.Context, list []registry.Component, o options) ([]named
 		// 打断不了正在跑的那一个——那要靠它自己把 ctx 传下去，
 		// 所以 Init 的签名里有 ctx
 		if ctx.Err() != nil {
-			o.log().Warn("收到退出信号，跳过剩余组件的初始化", "已就绪", len(closers))
+			o.log().Warn("shutdown signal received, skipping init of the remaining components", "ready", len(closers))
 			return closers, nil
 		}
 		// 每次重新取 logger：xlog 就在这个循环里把全局默认 logger 换掉，
 		// 它之后的组件应该用新的那个
-		o.log().Info("初始化", "组件", c.Key)
+		o.log().Info("initializing", "component", c.Key)
 		cl, err := safeInit(ctx, c)
 		if err != nil {
-			return closers, fmt.Errorf("%s 初始化失败: %w", c.Key, err)
+			return closers, fmt.Errorf("%s init failed: %w", c.Key, err)
 		}
 		if cl != nil {
 			closers = append(closers, named{c.Key, cl})
@@ -182,7 +182,7 @@ func shutdown(closers []named, o options) error {
 	var errs []error
 	for i := len(closers) - 1; i >= 0; i-- {
 		n := closers[i]
-		o.log().Info("关闭", "组件", n.key)
+		o.log().Info("closing", "component", n.key)
 		if err := safe(n.key, func() error { return n.c.Close() }); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", n.key, err))
 		}
@@ -239,8 +239,8 @@ func notifyShutdown(o options) (context.Context, func()) {
 			// 先还原默认处置再取消：这中间要是又来一个信号，
 			// 要的就是它直接把进程终止掉，而不是被一个已经没人看的 handler 收走
 			signal.Stop(ch)
-			o.log().Info("收到退出信号，开始优雅关闭；再发一次可立即终止",
-				"信号", s.String())
+			o.log().Info("shutdown signal received, closing gracefully; send it again to terminate now",
+				"signal", s.String())
 			cancel()
 		case <-ctx.Done():
 			signal.Stop(ch)

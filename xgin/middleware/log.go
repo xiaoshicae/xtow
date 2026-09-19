@@ -127,21 +127,21 @@ func Log(opts ...LogOption) gin.HandlerFunc {
 			}
 
 			attrs := []any{
-				"方法", c.Request.Method,
-				"路由", route,
-				"路径", c.Request.URL.Path,
-				"状态", c.Writer.Status(),
-				"耗时", elapsed,
-				"客户端", c.ClientIP(),
-				"请求头", RedactHeaders(c.Request.Header),
+				"method", c.Request.Method,
+				"route", route,
+				"path", c.Request.URL.Path,
+				"status", c.Writer.Status(),
+				"elapsed", elapsed,
+				"client_ip", c.ClientIP(),
+				"request_headers", RedactHeaders(c.Request.Header),
 			}
 			if o.reqBody {
-				attrs = append(attrs, "请求体", RedactBody(reqBody, c.Request.Header.Get("Content-Type")))
+				attrs = append(attrs, "request_body", RedactBody(reqBody, c.Request.Header.Get("Content-Type")))
 			}
 			if cw != nil {
 				ct := c.Writer.Header().Get("Content-Type")
 				if isText(ct) && cw.buf.Len() > 0 {
-					attrs = append(attrs, "响应体", RedactBody(cw.buf.Bytes(), ct))
+					attrs = append(attrs, "response_body", RedactBody(cw.buf.Bytes(), ct))
 				}
 				// 先还原 writer，再还回池子：外层中间件可能还要用它
 				c.Writer = orig
@@ -149,10 +149,10 @@ func Log(opts ...LogOption) gin.HandlerFunc {
 				writerPool.Put(cw)
 			}
 			if len(c.Errors) > 0 {
-				attrs = append(attrs, "错误", c.Errors.String())
+				attrs = append(attrs, "errors", c.Errors.String())
 			}
 
-			slog.InfoContext(c.Request.Context(), "请求完成", attrs...)
+			slog.InfoContext(c.Request.Context(), "request completed", attrs...)
 		}()
 
 		c.Next()
@@ -194,10 +194,10 @@ func snapshotBody(req *http.Request) []byte {
 	ct := req.Header.Get("Content-Type")
 	// 文件上传和二进制流不读：内容对排查没用，读一遍却要付全部的内存和时间
 	if strings.Contains(ct, "multipart/form-data") {
-		return []byte("[multipart/form-data 已省略]")
+		return []byte("[multipart/form-data omitted]")
 	}
 	if strings.Contains(ct, "application/octet-stream") {
-		return []byte("[二进制内容已省略]")
+		return []byte("[binary content omitted]")
 	}
 
 	if req.GetBody != nil {

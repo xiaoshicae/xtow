@@ -291,7 +291,7 @@ func TestRollback_预算耗尽时把剩下的记下来(t *testing.T) {
 	if !strings.Contains(strings.Join(names, ","), "第一步") {
 		t.Errorf("没轮到的步骤也该记下来，got=%v", names)
 	}
-	if !strings.Contains(res.String(), "回滚失败") {
+	if !strings.Contains(res.String(), "failed to roll back") {
 		t.Errorf("结果摘要里该看得出回滚没做完，got=%s", res.String())
 	}
 }
@@ -354,7 +354,7 @@ func TestNew_nil步骤直接panic(t *testing.T) {
 		if r == nil {
 			t.Fatal("传 nil 步骤应当 panic")
 		}
-		if !strings.Contains(fmt.Sprint(r), "第 1 步") {
+		if !strings.Contains(fmt.Sprint(r), "step 1") {
 			t.Errorf("应指出是第几步，got=%v", r)
 		}
 	}()
@@ -388,7 +388,7 @@ func TestExecute_nil_ctx不炸(t *testing.T) {
 }
 
 func TestDependencyString(t *testing.T) {
-	if Strong.String() != "强依赖" || Weak.String() != "弱依赖" || Dependency(9).String() != "未知" {
+	if Strong.String() != "strong" || Weak.String() != "weak" || Dependency(9).String() != "unknown" {
 		t.Error("依赖类型的文案不对")
 	}
 }
@@ -398,11 +398,11 @@ func TestResultString(t *testing.T) {
 		res  *Result
 		want string
 	}{
-		{&Result{}, "流程成功"},
-		{&Result{Skipped: []*StepError{{}}}, "跳过 1 个"},
-		{&Result{Err: errors.New("炸了")}, "流程失败"},
-		{&Result{Err: errors.New("炸了"), Rolled: true}, "已回滚"},
-		{&Result{Err: errors.New("炸了"), Rolled: true, RollbackErrors: []*StepError{{}}}, "1 步回滚失败"},
+		{&Result{}, "flow succeeded"},
+		{&Result{Skipped: []*StepError{{}}}, "1 weak step(s) skipped"},
+		{&Result{Err: errors.New("炸了")}, "flow failed"},
+		{&Result{Err: errors.New("炸了"), Rolled: true}, "rolled back"},
+		{&Result{Err: errors.New("炸了"), Rolled: true, RollbackErrors: []*StepError{{}}}, "1 step(s) failed to roll back"},
 	} {
 		if got := c.res.String(); !strings.Contains(got, c.want) {
 			t.Errorf("摘要里应含 %q，got=%q", c.want, got)
@@ -413,7 +413,7 @@ func TestResultString(t *testing.T) {
 func TestStepError(t *testing.T) {
 	cause := errors.New("根因")
 	e := &StepError{Processor: "扣款", Dependency: Strong, Err: cause}
-	if !strings.Contains(e.Error(), "扣款") || !strings.Contains(e.Error(), "强依赖") {
+	if !strings.Contains(e.Error(), "扣款") || !strings.Contains(e.Error(), "strong") {
 		t.Errorf("错误信息应带上步骤名和依赖类型，got=%s", e.Error())
 	}
 	if !errors.Is(e, cause) {

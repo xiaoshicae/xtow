@@ -85,10 +85,10 @@ func DefaultConfig() Config {
 // validate 检查配置本身说不通的地方
 func (c Config) validate() error {
 	if c.RetryCount < 0 {
-		return fmt.Errorf("RetryCount 不能为负数，got=%d", c.RetryCount)
+		return fmt.Errorf("RetryCount must not be negative, got=%d", c.RetryCount)
 	}
 	if c.MaxIdleConns < 0 || c.MaxIdleConnsPerHost < 0 {
-		return fmt.Errorf("连接数不能为负数，MaxIdleConns=%d MaxIdleConnsPerHost=%d", c.MaxIdleConns, c.MaxIdleConnsPerHost)
+		return fmt.Errorf("connection counts must not be negative, MaxIdleConns=%d MaxIdleConnsPerHost=%d", c.MaxIdleConns, c.MaxIdleConnsPerHost)
 	}
 	return nil
 }

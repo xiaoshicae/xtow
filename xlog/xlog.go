@@ -71,7 +71,7 @@ func handlerFor(format string) (func(io.Writer, *slog.HandlerOptions) slog.Handl
 		return func(w io.Writer, o *slog.HandlerOptions) slog.Handler { return slog.NewJSONHandler(w, o) }, nil
 	default:
 		return nil, xerror.Newf("xlog", "new",
-			"不认识的日志格式 Format=[%s]，可选 %s / %s", format, FormatJSON, FormatText)
+			"unknown log format Format=[%s], expected %s or %s", format, FormatJSON, FormatText)
 	}
 }
 
@@ -79,7 +79,7 @@ func handlerFor(format string) (func(io.Writer, *slog.HandlerOptions) slog.Handl
 func newFileWriter(c FileConfig) (io.WriteCloser, error) {
 	if c.Path != "" {
 		if err := os.MkdirAll(c.Path, 0o755); err != nil {
-			return nil, xerror.Newf("xlog", "new", "创建日志目录失败 Path=[%s], err=[%v]", c.Path, err)
+			return nil, xerror.Newf("xlog", "new", "create log dir failed Path=[%s], err=[%v]", c.Path, err)
 		}
 	}
 	perm, err := parsePerm(c.Perm)
@@ -103,7 +103,7 @@ func parseLevel(s string) (slog.Level, error) {
 		return slog.LevelError, nil
 	default:
 		return 0, xerror.Newf("xlog", "new",
-			"不认识的日志级别 Level=[%s]，可选 debug / info / warn / error", s)
+			"unknown log level Level=[%s], expected debug / info / warn / error", s)
 	}
 }
 
@@ -115,7 +115,7 @@ func parsePerm(s string) (os.FileMode, error) {
 	v, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
 		return 0, xerror.Newf("xlog", "new",
-			"日志文件权限格式不对 Perm=[%s]，应为八进制字符串如 \"0644\"", s)
+			"malformed log file permission Perm=[%s], expected an octal string such as \"0644\"", s)
 	}
 	return os.FileMode(v), nil
 }

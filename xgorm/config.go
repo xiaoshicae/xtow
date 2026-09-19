@@ -168,15 +168,15 @@ func (c *ClientConfig) UnmarshalYAML(n *yaml.Node) error {
 // validate 检查配置本身说不通的地方，在建连之前就失败
 func (c ClientConfig) validate() error {
 	if c.DSN == "" {
-		return fmt.Errorf("DSN 不能为空")
+		return fmt.Errorf("DSN must not be empty")
 	}
 	switch c.Driver {
 	case DriverMySQL, DriverPostgres:
 	default:
-		return fmt.Errorf("不认识的 Driver=%q，支持 mysql / postgres", c.Driver)
+		return fmt.Errorf("unknown Driver=%q, supported: mysql / postgres", c.Driver)
 	}
 	if c.MaxOpenConns <= 0 {
-		return fmt.Errorf("MaxOpenConns 必须大于 0，got=%d", c.MaxOpenConns)
+		return fmt.Errorf("MaxOpenConns must be > 0, got=%d", c.MaxOpenConns)
 	}
 	return nil
 }

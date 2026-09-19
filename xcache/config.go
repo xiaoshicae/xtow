@@ -92,13 +92,13 @@ func (c *ClientConfig) UnmarshalYAML(n *yaml.Node) error {
 // validate 检查配置本身说不通的地方
 func (c ClientConfig) validate() error {
 	if c.NumCounters <= 0 {
-		return fmt.Errorf("NumCounters 必须大于 0，got=%d", c.NumCounters)
+		return fmt.Errorf("NumCounters must be > 0, got=%d", c.NumCounters)
 	}
 	if c.MaxCost <= 0 {
-		return fmt.Errorf("MaxCost 必须大于 0，got=%d", c.MaxCost)
+		return fmt.Errorf("MaxCost must be > 0, got=%d", c.MaxCost)
 	}
 	if c.BufferItems <= 0 {
-		return fmt.Errorf("BufferItems 必须大于 0，got=%d", c.BufferItems)
+		return fmt.Errorf("BufferItems must be > 0, got=%d", c.BufferItems)
 	}
 	return nil
 }

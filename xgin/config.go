@@ -88,22 +88,22 @@ func DefaultConfig() Config {
 // validate 检查配置本身说不通的地方
 func (c Config) validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
-		return fmt.Errorf("Port 必须在 1..65535 之间，got=%d", c.Port)
+		return fmt.Errorf("Port must be within 1..65535, got=%d", c.Port)
 	}
 	// 只配一半的 TLS 是最危险的一种配错：服务会以明文起来，
 	// 而配置文件看上去是配了证书的
 	if (c.CertFile == "") != (c.KeyFile == "") {
-		return fmt.Errorf("CertFile 和 KeyFile 必须同时配置或同时留空")
+		return fmt.Errorf("CertFile and KeyFile must both be set or both be empty")
 	}
 	// 0 在这里不是「不限时」而是「一点都不等」：Shutdown 会拿到一个已经过期的
 	// context，在途请求当场被切断，而配置文件看上去只是没设上限
 	if c.ShutdownTimeout <= 0 {
-		return fmt.Errorf("ShutdownTimeout 必须大于 0（0 不是不限时，是一点都不等），got=%v", c.ShutdownTimeout)
+		return fmt.Errorf("ShutdownTimeout must be > 0 (0 is not unlimited, it is no wait at all), got=%v", c.ShutdownTimeout)
 	}
 	switch c.Mode {
 	case "release", "debug", "test":
 	default:
-		return fmt.Errorf("不认识的 Mode=%q，支持 release / debug / test", c.Mode)
+		return fmt.Errorf("unknown Mode=%q, supported: release / debug / test", c.Mode)
 	}
 	return nil
 }

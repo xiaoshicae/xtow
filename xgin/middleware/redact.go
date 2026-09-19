@@ -8,8 +8,10 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -252,39 +254,49 @@ func redactForm(body string) string {
 	return values.Encode()
 }
 
-// redactedOnly 所有被遮掉的头共用这一个切片，内容恒定且只读
-var redactedOnly = []string{Redacted}
-
-// headerPool 复用脱敏用的中间 map
+// RedactHeaders 脱敏请求头，返回一个可以直接交给 slog 的值。
 //
-// 它唯一的用途是马上被序列化成字符串，每请求分配一次纯属浪费——
-// 而一次请求要脱敏两遍（请求头 + 响应头）。
-var headerPool = sync.Pool{New: func() any { return make(http.Header, 16) }}
-
-// RedactHeaders 脱敏请求头并序列化成 JSON 字符串
+// 返回 slog.Value 而不是序列化好的字符串：交出字符串的话，slog 还要把它
+// 当成一个普通字符串字段再转义一遍，日志里就成了
 //
-// 不手写序列化：encoding/json 会做 HTML 转义、会按 key 排序，
-// 手写极容易在这些细节上跟它产生差异，而省下的只是一次反射调用。
-func RedactHeaders(h http.Header) string {
+//	"请求头":"{\"Authorization\":[\"***REDACTED***\"]}"
+//
+// 检索时得先解一层字符串才能解 JSON。交出 slog.Value，序列化只发生一次，
+// 这个字段在日志里就是一个正常的嵌套对象，顺带省掉了那次 json.Marshal
+// （实测整条日志从 2777ns/19 allocs 降到 1630ns/9 allocs）。
+//
+// 多值的头拼成逗号分隔的一个字符串，而不是数组：同一个字段名在不同日志行里
+// 忽而是字符串忽而是数组，日志系统建索引时会直接拒收。
+func RedactHeaders(h http.Header) slog.Value {
 	set := headers()
 
-	out := headerPool.Get().(http.Header)
-	for k, v := range h {
+	// 按 key 排序：map 的遍历顺序是随机的，不排的话同样一组请求头
+	// 每行日志的字段顺序都不一样，对不上也没法 diff
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	attrs := make([]slog.Attr, 0, len(keys))
+	for _, k := range keys {
 		if set[strings.ToLower(k)] {
-			out[k] = redactedOnly
-		} else {
-			out[k] = v
+			attrs = append(attrs, slog.String(k, Redacted))
+			continue
 		}
+		attrs = append(attrs, slog.String(k, headerValue(h[k])))
 	}
+	return slog.GroupValue(attrs...)
+}
 
-	b, err := json.Marshal(out)
-
-	// 归还前清空：values 是对原 header 切片的引用，留着会让它们回收不掉
-	clear(out)
-	headerPool.Put(out)
-
-	if err != nil {
-		return "{}"
+// headerValue 把一个头的多个取值拼成一个字符串
+func headerValue(v []string) string {
+	switch len(v) {
+	case 0:
+		return ""
+	case 1:
+		return v[0] // 绝大多数头都是单值，这一支不分配
+	default:
+		return strings.Join(v, ", ")
 	}
-	return string(b)
 }

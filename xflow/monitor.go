@@ -62,29 +62,29 @@ func (f *Flow[T]) notifyStep(ctx context.Context, m Monitor, rollback bool, p Pr
 	if m == nil {
 		return
 	}
-	e := &StepEvent{
+	defer recoverNotify()
+	m.OnStep(ctx, &StepEvent{
 		Flow: f.name, Processor: p.Name(), Dependency: p.Dependency(),
 		Rollback: rollback, Err: err, Duration: time.Since(start),
-	}
-	safeNotify(func() { m.OnStep(ctx, e) })
+	})
 }
 
 func (f *Flow[T]) notifyFlow(ctx context.Context, m Monitor, res *Result, start time.Time) {
 	if m == nil {
 		return
 	}
-	e := &FlowEvent{Flow: f.name, Result: res, Duration: time.Since(start)}
-	safeNotify(func() { m.OnFlow(ctx, e) })
+	defer recoverNotify()
+	m.OnFlow(ctx, &FlowEvent{Flow: f.name, Result: res, Duration: time.Since(start)})
 }
 
-// safeNotify 隔离监控实现的 panic
-func safeNotify(fn func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("xflow 监控实现 panic，已隔离", "错误", r)
-		}
-	}()
-	fn()
+// recoverNotify 隔离监控实现的 panic
+//
+// 直接 defer 它，而不是 defer 一个调用 m.OnX 的闭包：闭包要捕获 m、ctx
+// 和事件，于是每一步都多一次分配，而这是每步都走的路径。
+func recoverNotify() {
+	if r := recover(); r != nil {
+		slog.Error("xflow monitor panicked, isolated", "error", r)
+	}
 }
 
 // slogMonitor 默认实现，写到标准库 slog。
@@ -95,31 +95,37 @@ func safeNotify(fn func()) {
 type slogMonitor struct{}
 
 func (slogMonitor) OnStep(ctx context.Context, e *StepEvent) {
-	action := "执行"
-	if e.Rollback {
-		action = "回滚"
-	}
-	attrs := []any{"流程", e.Flow, "步骤", e.Processor, "依赖", e.Dependency.String(), "耗时", e.Duration}
-
-	if e.Err != nil {
-		slog.WarnContext(ctx, "xflow 步骤"+action+"失败", append(attrs, "错误", e.Err)...)
+	// 成功的步骤记 debug。级别没开就在这里返回，不要先把这一行拼出来
+	// 再交给 slog 丢掉——一个五步的流程每次执行要拼五次，全是白干
+	if e.Err == nil && !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
-	slog.DebugContext(ctx, "xflow 步骤"+action+"完成", attrs...)
+
+	action := "process"
+	if e.Rollback {
+		action = "rollback"
+	}
+	attrs := []any{"flow", e.Flow, "step", e.Processor, "dependency", e.Dependency.String(), "elapsed", e.Duration}
+
+	if e.Err != nil {
+		slog.WarnContext(ctx, "xflow step "+action+" failed", append(attrs, "error", e.Err)...)
+		return
+	}
+	slog.DebugContext(ctx, "xflow step "+action+" done", attrs...)
 }
 
 func (slogMonitor) OnFlow(ctx context.Context, e *FlowEvent) {
-	attrs := []any{"流程", e.Flow, "耗时", e.Duration, "结果", e.Result.String()}
+	attrs := []any{"flow", e.Flow, "elapsed", e.Duration, "result", e.Result.String()}
 
 	// 回滚有失败意味着有资源没补偿回来，需要人工介入——这一条必须醒目
 	if len(e.Result.RollbackErrors) > 0 {
-		slog.ErrorContext(ctx, "xflow 回滚未能全部完成，可能有资源悬着",
-			append(attrs, "未补偿步骤数", len(e.Result.RollbackErrors))...)
+		slog.ErrorContext(ctx, "xflow rollback did not complete, resources may be left dangling",
+			append(attrs, "uncompensated_steps", len(e.Result.RollbackErrors))...)
 		return
 	}
 	if !e.Result.Success() {
-		slog.WarnContext(ctx, "xflow 流程失败", attrs...)
+		slog.WarnContext(ctx, "xflow flow failed", attrs...)
 		return
 	}
-	slog.InfoContext(ctx, "xflow 流程完成", attrs...)
+	slog.InfoContext(ctx, "xflow flow done", attrs...)
 }

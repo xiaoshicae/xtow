@@ -80,8 +80,8 @@ func (m *Metrics) Install() {
 	// 换了 registry，缓存里的 collector 还挂在旧的那个上，
 	// 通过它们记的值不会出现在 /metrics 里。清掉，让下次打点重新建。
 	if n := clearCollectors(); n > 0 {
-		slog.Warn("xmetric 初始化之前已有打点，那些值记在临时 registry 上、不会被导出",
-			"指标数", n)
+		slog.Warn("metrics were recorded before xmetric was initialized; those values went to a temporary registry and will not be exported",
+			"metrics", n)
 	}
 }
 
@@ -176,7 +176,7 @@ func register(reg *prometheus.Registry, c prometheus.Collector) (prometheus.Coll
 	}
 	// 同名不同标签之类的冲突：这个 collector 不在 registry 里，
 	// 通过它记的值永远导不出去
-	return c, fmt.Errorf("xmetric: 注册指标失败，通过它记录的值不会被导出: %w", err)
+	return c, fmt.Errorf("xmetric: metric registration failed, values recorded through it will not be exported: %w", err)
 }
 
 type noopCloser struct{}
@@ -221,7 +221,7 @@ func RegisterAs[T prometheus.Collector](c T) (T, error) {
 	}
 	typed, ok := registered.(T)
 	if !ok {
-		return c, fmt.Errorf("xmetric: 指标名已被注册成 %T，通过它记录的值不会被导出", registered)
+		return c, fmt.Errorf("xmetric: metric name is already registered as %T, values recorded through it will not be exported", registered)
 	}
 	return typed, nil
 }

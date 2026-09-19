@@ -57,7 +57,7 @@ func TestLogger_SQL走结构化字段(t *testing.T) {
 	if got[0]["sql"] != "SELECT * FROM users WHERE id = ?" {
 		t.Errorf("SQL 应是独立字段，got=%v", got[0])
 	}
-	if got[0]["耗时"] == nil || got[0]["影响行数"] != float64(1) {
+	if got[0]["elapsed"] == nil || got[0]["rows_affected"] != float64(1) {
 		t.Errorf("耗时和行数也该是字段，got=%v", got[0])
 	}
 }
@@ -72,7 +72,7 @@ func TestLogger_慢查询记warn(t *testing.T) {
 	if len(got) != 1 || got[0]["level"] != "WARN" {
 		t.Fatalf("超过阈值应记 warn，got=%v", got)
 	}
-	if got[0]["阈值"] == nil {
+	if got[0]["threshold"] == nil {
 		t.Errorf("该带上阈值，否则看不出为什么算慢，got=%v", got[0])
 	}
 }
@@ -85,7 +85,7 @@ func TestLogger_出错记error(t *testing.T) {
 	if len(got) != 1 || got[0]["level"] != "ERROR" {
 		t.Fatalf("出错应记 error，got=%v", got)
 	}
-	if got[0]["错误"] != "连接断了" {
+	if got[0]["error"] != "连接断了" {
 		t.Errorf("该带上错误，got=%v", got[0])
 	}
 }
@@ -121,7 +121,7 @@ func TestLogger_行数未知时不写字段(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("应记一条，got=%v", got)
 	}
-	if _, has := got[0]["影响行数"]; has {
+	if _, has := got[0]["rows_affected"]; has {
 		t.Errorf("行数未知时不该写这个字段，got=%v", got[0])
 	}
 }
@@ -153,7 +153,7 @@ func TestLogger_InfoWarnError(t *testing.T) {
 	l := newGormLogger(DefaultClientConfig())
 	l.Info(context.Background(), "普通消息")
 	l.Warn(context.Background(), "警告 %d", 1)
-	l.Error(context.Background(), "错误")
+	l.Error(context.Background(), "error")
 
 	got := lines()
 	if len(got) != 3 {

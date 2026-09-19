@@ -195,18 +195,24 @@ func ctxAttrs(ctx context.Context) []slog.Attr {
 	if s != nil {
 		n = s.len()
 	}
-	f := traceExtractor.Load()
-	if n == 0 && f == nil {
+
+	// 先把链路标识取出来，再决定要不要分配这个切片。
+	// 「装了提取器、但这条 ctx 里没有 Span」是很常见的情况——启动日志、
+	// 后台任务、定时任务都是。先分配的话，这些日志每行都白白多一次分配，
+	// 建出来的还是个空切片。
+	var traceID, spanID string
+	if f := traceExtractor.Load(); f != nil {
+		traceID, spanID = (*f)(ctx)
+	}
+	if n == 0 && traceID == "" {
 		return nil
 	}
 
 	attrs := make([]slog.Attr, 0, n+2)
-	if f != nil {
-		if traceID, spanID := (*f)(ctx); traceID != "" {
-			attrs = append(attrs, slog.String("trace_id", traceID))
-			if spanID != "" {
-				attrs = append(attrs, slog.String("span_id", spanID))
-			}
+	if traceID != "" {
+		attrs = append(attrs, slog.String("trace_id", traceID))
+		if spanID != "" {
+			attrs = append(attrs, slog.String("span_id", spanID))
 		}
 	}
 	if s != nil {

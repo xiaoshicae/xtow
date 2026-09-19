@@ -124,7 +124,7 @@ func (g *XGin) build() {
 
 		if g.settings.zhTrans {
 			if err := trans.RegisterZH(); err != nil {
-				slog.Warn("xgin 注册中文校验翻译失败", "错误", err)
+				slog.Warn("xgin failed to register the zh validation translator", "error", err)
 			}
 		}
 
@@ -135,7 +135,7 @@ func (g *XGin) build() {
 // Start 启动服务并阻塞到它停止。由 xtow.Run 调用。
 func (g *XGin) Start(ctx context.Context) error {
 	if err := cfg.validate(); err != nil {
-		return fmt.Errorf("xgin: 配置有误: %w", err)
+		return fmt.Errorf("xgin: invalid config: %w", err)
 	}
 	// 在这里设而不是在装配里：装配可能发生在配置加载之前，
 	// 那时读到的是默认值，配置里写的 Mode 从此再也不生效
@@ -150,17 +150,17 @@ func (g *XGin) Start(ctx context.Context) error {
 		g.mu.Unlock()
 		// 退出信号早于启动到达。照常监听的话，服务会在「已经收到停止信号」
 		// 之后才起来，然后一直跑到框架等超时为止
-		slog.Warn("xgin 收到退出信号早于启动，服务不再启动")
+		slog.Warn("xgin received the shutdown signal before starting, the server will not start")
 		return nil
 	}
 	if g.srv != nil {
 		g.mu.Unlock()
-		return fmt.Errorf("xgin: 服务已经在 %s 上运行了", g.srv.Addr)
+		return fmt.Errorf("xgin: server is already running on %s", g.srv.Addr)
 	}
 	g.srv = srv
 	g.mu.Unlock()
 
-	slog.Info("xgin 开始监听", "地址", addr, "TLS", cfg.tlsEnabled(), "H2C", cfg.UseH2C && !cfg.tlsEnabled())
+	slog.Info("xgin listening", "addr", addr, "tls", cfg.tlsEnabled(), "h2c", cfg.UseH2C && !cfg.tlsEnabled())
 
 	var err error
 	if cfg.tlsEnabled() {
@@ -171,7 +171,7 @@ func (g *XGin) Start(ctx context.Context) error {
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
-	return fmt.Errorf("xgin: 监听 %s 失败: %w", addr, err)
+	return fmt.Errorf("xgin: listen on %s failed: %w", addr, err)
 }
 
 // Stop 优雅关闭服务。由 xtow.Run 调用。
@@ -191,7 +191,7 @@ func (g *XGin) Stop(ctx context.Context) error {
 	defer cancel()
 
 	if err := srv.Shutdown(stopCtx); err != nil {
-		return fmt.Errorf("xgin: 优雅关闭失败: %w", err)
+		return fmt.Errorf("xgin: graceful shutdown failed: %w", err)
 	}
 	return nil
 }

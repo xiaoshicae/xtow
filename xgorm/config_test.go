@@ -102,7 +102,7 @@ func TestConfig_两种写法不能混用(t *testing.T) {
 	if err == nil {
 		t.Fatal("混用两种写法应当失败")
 	}
-	if !strings.Contains(err.Error(), "混用") {
+	if !strings.Contains(err.Error(), "cannot mix") {
 		t.Errorf("错误信息该说清楚为什么，got=%v", err)
 	}
 }

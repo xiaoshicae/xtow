@@ -15,17 +15,17 @@ type poolMetric struct {
 }
 
 var poolMetrics = []poolMetric{
-	{"redis_pool_connections", "当前连接池中的连接数（使用中 + 空闲）", prometheus.GaugeValue,
+	{"redis_pool_connections", "Connections in the pool right now (in use + idle)", prometheus.GaugeValue,
 		func(s *redis.PoolStats) float64 { return float64(s.TotalConns) }},
-	{"redis_pool_connections_idle", "当前空闲的连接数", prometheus.GaugeValue,
+	{"redis_pool_connections_idle", "Idle connections right now", prometheus.GaugeValue,
 		func(s *redis.PoolStats) float64 { return float64(s.IdleConns) }},
-	{"redis_pool_connections_stale_total", "因超时被移除的连接累计数", prometheus.CounterValue,
+	{"redis_pool_connections_stale_total", "Total connections removed for being stale", prometheus.CounterValue,
 		func(s *redis.PoolStats) float64 { return float64(s.StaleConns) }},
-	{"redis_pool_hits_total", "累计命中空闲连接的次数", prometheus.CounterValue,
+	{"redis_pool_hits_total", "Total times an idle connection was reused", prometheus.CounterValue,
 		func(s *redis.PoolStats) float64 { return float64(s.Hits) }},
-	{"redis_pool_misses_total", "累计未命中空闲连接的次数", prometheus.CounterValue,
+	{"redis_pool_misses_total", "Total times no idle connection was available", prometheus.CounterValue,
 		func(s *redis.PoolStats) float64 { return float64(s.Misses) }},
-	{"redis_pool_timeouts_total", "累计等待连接超时的次数", prometheus.CounterValue,
+	{"redis_pool_timeouts_total", "Total times waiting for a connection timed out", prometheus.CounterValue,
 		func(s *redis.PoolStats) float64 { return float64(s.Timeouts) }},
 }
 

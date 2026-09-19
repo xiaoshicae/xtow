@@ -49,15 +49,15 @@ func RegisterZH() error {
 	locale := zh.New()
 	t, ok := ut.New(locale, locale).GetTranslator("zh")
 	if !ok {
-		return errors.New("trans: 找不到 zh 翻译器")
+		return errors.New("trans: zh translator not found")
 	}
 
 	v, ok := binding.Validator.Engine().(*validator.Validate)
 	if !ok {
-		return fmt.Errorf("trans: gin 的校验器不是 *validator.Validate，而是 %T", binding.Validator.Engine())
+		return fmt.Errorf("trans: gin validator is %T, not *validator.Validate", binding.Validator.Engine())
 	}
 	if err := zhtrans.RegisterDefaultTranslations(v, t); err != nil {
-		return fmt.Errorf("trans: 注册中文翻译失败: %w", err)
+		return fmt.Errorf("trans: register zh translations: %w", err)
 	}
 
 	translator = t

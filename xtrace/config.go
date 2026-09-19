@@ -73,8 +73,8 @@ func DefaultConfig() Config {
 // validate 检查配置本身说不通的地方
 func (c Config) validate() error {
 	if c.ShutdownTimeout <= 0 {
-		return fmt.Errorf("xtrace: 配置有误: ShutdownTimeout 必须大于 0"+
-			"（0 不是不限时，是一点都不等，缓冲区里的 Span 会被丢掉），got=%v", c.ShutdownTimeout)
+		return fmt.Errorf("xtrace: invalid config: ShutdownTimeout must be > 0 "+
+			"(0 is not unlimited, it is no wait at all, and buffered spans get dropped), got=%v", c.ShutdownTimeout)
 	}
 	return nil
 }

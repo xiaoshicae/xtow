@@ -59,17 +59,17 @@ func newCollectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 	total := register(prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   xmetric.Namespace(),
 		Name:        "http_requests_total",
-		Help:        "HTTP 请求总数",
+		Help:        "Total number of HTTP requests",
 		ConstLabels: xmetric.ConstLabels(),
-	}, []string{"method", "route", "status"}), "请求数")
+	}, []string{"method", "route", "status"}), "request count")
 
 	latency := register(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   xmetric.Namespace(),
 		Name:        "http_request_duration_seconds",
-		Help:        "HTTP 请求耗时",
+		Help:        "HTTP request duration",
 		Buckets:     xmetric.HTTPDurationBuckets(),
 		ConstLabels: xmetric.ConstLabels(),
-	}, []string{"method", "route", "status"}), "请求耗时")
+	}, []string{"method", "route", "status"}), "request duration")
 
 	return total, latency
 }
@@ -79,7 +79,7 @@ func newCollectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 func register[T prometheus.Collector](c T, what string) T {
 	registered, err := xmetric.RegisterAs(c)
 	if err != nil {
-		slog.Error("xgin "+what+"指标注册失败，通过它记录的值不会被导出", "错误", err)
+		slog.Error("xgin failed to register the "+what+" metric, values recorded through it will not be exported", "error", err)
 	}
 	return registered
 }

@@ -39,7 +39,7 @@ var pingInterval = time.Second
 // gorm.Open 在自动 ping 失败时不关它自己建的池子，那会漏一个常驻协程。
 func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("xgorm: 配置有误: %w", err)
+		return nil, nil, fmt.Errorf("xgorm: invalid config: %w", err)
 	}
 
 	dsn, info, err := resolveDSN(cfg)
@@ -58,7 +58,7 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 		// 这里再关一次是兜底：*sql.DB 允许重复 Close，代价是一次空调用，
 		// 而万一哪个版本不关，漏的是一个再也不会退出的常驻协程
 		closePool(db)
-		return nil, nil, fmt.Errorf("xgorm: 连接失败 %s: %w", info.Addr, err)
+		return nil, nil, fmt.Errorf("xgorm: connect to %s failed: %w", info.Addr, err)
 	}
 
 	// 从这里往后的每一步都是我们自己的，失败了没人替我们收拾：
@@ -72,7 +72,7 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 
 	pool, err := db.DB()
 	if err != nil {
-		return nil, nil, fmt.Errorf("xgorm: 取底层连接池失败: %w", err)
+		return nil, nil, fmt.Errorf("xgorm: get underlying pool: %w", err)
 	}
 	pool.SetMaxOpenConns(cfg.MaxOpenConns)
 	pool.SetMaxIdleConns(cfg.MaxIdleConns)
@@ -80,12 +80,12 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	pool.SetConnMaxIdleTime(cfg.MaxIdleTime)
 
 	if err := ping(ctx, pool, cfg); err != nil {
-		return nil, nil, fmt.Errorf("xgorm: 连不上 %s: %w", info.Addr, err)
+		return nil, nil, fmt.Errorf("xgorm: cannot reach %s: %w", info.Addr, err)
 	}
 
 	if cfg.Trace {
 		if err := installTracing(db, info); err != nil {
-			return nil, nil, fmt.Errorf("xgorm: 挂链路回调失败: %w", err)
+			return nil, nil, fmt.Errorf("xgorm: install tracing callbacks: %w", err)
 		}
 	}
 
@@ -132,7 +132,7 @@ func closePool(db *gorm.DB) {
 		return
 	}
 	if cerr := pool.Close(); cerr != nil {
-		slog.Warn("xgorm 关闭连接池失败", "错误", cerr)
+		slog.Warn("xgorm failed to close the pool", "error", cerr)
 	}
 }
 
@@ -143,7 +143,7 @@ type poolCloser struct {
 
 func (c *poolCloser) Close() error {
 	if err := c.pool.Close(); err != nil {
-		return fmt.Errorf("xgorm: 关闭 %s 失败: %w", c.info.Addr, err)
+		return fmt.Errorf("xgorm: close %s failed: %w", c.info.Addr, err)
 	}
 	return nil
 }
@@ -196,12 +196,12 @@ func initAll(ctx context.Context) (io.Closer, error) {
 	}
 
 	if names := reg.Names(); len(names) > 0 {
-		slog.Info("xgorm 就绪", "实例", names)
+		slog.Info("xgorm ready", "instances", names)
 	}
 	if metricEnabled(cfg.Clients) {
 		// 不让启动失败：指标导不出去是可观测性问题，不该拦住服务起来
 		if _, err := xmetric.RegisterAs(newPoolCollector(xmetric.Namespace(), xmetric.ConstLabels(), poolStats)); err != nil {
-			slog.Error("xgorm 连接池指标注册失败", "错误", err)
+			slog.Error("xgorm failed to register pool metrics", "error", err)
 		}
 	}
 	return closer, nil

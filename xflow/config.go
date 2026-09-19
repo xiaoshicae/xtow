@@ -33,7 +33,7 @@ func DefaultConfig() Config {
 
 func (c Config) validate() error {
 	if c.RollbackTimeout <= 0 {
-		return fmt.Errorf("RollbackTimeout 必须大于 0，got=%v", c.RollbackTimeout)
+		return fmt.Errorf("RollbackTimeout must be > 0, got=%v", c.RollbackTimeout)
 	}
 	return nil
 }
@@ -51,7 +51,7 @@ func init() {
 		Config: &cfg,
 		Init: func(context.Context) (io.Closer, error) {
 			if err := cfg.validate(); err != nil {
-				return nil, fmt.Errorf("xflow: 配置有误: %w", err)
+				return nil, fmt.Errorf("xflow: invalid config: %w", err)
 			}
 			return nil, nil // 没有要关的东西
 		},

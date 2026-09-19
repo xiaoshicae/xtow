@@ -17,7 +17,7 @@ func newDurationHistogram() *prometheus.HistogramVec {
 	return prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   xmetric.Namespace(),
 		Name:        "http_client_request_duration_seconds",
-		Help:        "出站 HTTP 请求耗时",
+		Help:        "Outbound HTTP request duration",
 		Buckets:     xmetric.HTTPDurationBuckets(),
 		ConstLabels: xmetric.ConstLabels(),
 	}, []string{"method", "host", "status"})
