@@ -129,6 +129,9 @@ func Log(opts ...LogOption) gin.HandlerFunc {
 			attrs := []any{
 				"method", c.Request.Method,
 				"route", route,
+				// 只记 Path，不含查询串：GET /login?token=... 这种请求里
+				// 凭证就在 URL 上。换成 RequestURI() 或 URL.String() 看着
+				// 都像是「把日志记全一点」，实际是把凭证明文写进日志
 				"path", c.Request.URL.Path,
 				"status", c.Writer.Status(),
 				"elapsed", elapsed,

@@ -194,6 +194,9 @@ XRedis:
 XCache:
   NumCounters: 1000000     # 频率计数器个数，建议取预期条目数的 10 倍
   MaxCost: 100000          # 总成本上限。本包写入时 cost 固定为 1，所以等价于条目数
+                           # 统计的是使用者给的 cost，不含 ristretto 每条 56 字节的
+                           # 内部开销（它默认是算进去的，那样 MaxCost: 2000 实际只
+                           # 存得下 35 条）。按字节记 cost 时把这部分算进自己的预算
   BufferItems: 64
   DefaultTTL: 5m           # 包级 Set 用的过期时间
 ```

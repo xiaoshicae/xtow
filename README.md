@@ -220,6 +220,21 @@ xtow 的做法是三件事一起：
 配置文件位置：`--config=<path>` > `XTOW_CONFIG` > `conf/application.yml` 等约定路径。
 显式指定的文件找不到是错误；约定路径一个都没命中则只告警，全用默认值起。
 
+### 我们故意跟底层库不一样的地方
+
+框架的默认值是量过之后定的，有几处跟底层库自己的默认不同。
+你熟悉这些库的话，这张表省得你被"怎么跟文档说的不一样"绊一下：
+
+| 配置 | 库自己的默认 | 这里的默认 | 为什么 |
+|---|---|---|---|
+| `XGin.TrustedProxies` | 全都信（`0.0.0.0/0`） | 一个都不信 | 否则谁发 `X-Forwarded-For` 谁就是访问日志里的 `client_ip`，限流和审计跟着失效 |
+| `XGin.MaxMultipartMemory` | 32MB | 8MB | 它是落盘阈值不是请求体上限，堆开销约为它的三倍：一次 60MB 的上传，32MB 要吃 96MB 堆 |
+| `XGorm.Log: false` | 换成 GORM 自己的 stdout logger | 真的不打 | 那个默认实现带 ANSI 颜色直写 `os.Stdout`，绕开 slog 插进日志流 |
+| `XRedis` 命令超时 | 只认 `ReadTimeout` | 听调用方的 ctx | 不然 200ms 预算的请求会在慢 Redis 上等满 `ReadTimeout`（实测 5s） |
+| `XCache.MaxCost` | 每条另计 56 字节内部开销 | 只算你给的 cost | 否则 `MaxCost: 2000` 实际只存得下 35 条 |
+| `XGorm` 建连 | `gorm.Open` 自己 ping 一次 | 关掉，走框架的 ctx-aware ping | 它用自己的 context，退出信号和重试都管不到 |
+
+
 ---
 
 ## 仓库结构
@@ -246,12 +261,17 @@ xtow/
 ├── docs/config.md       全部配置项参考
 ├── example/             可直接跑的示例，同时是唯一的跨模块集成测试
 ├── check.sh             把设计约束编译成检查
+├── mutate.sh            变异测试：把每条承诺改坏，看有没有测试会失败
 └── test.sh              跑全仓库测试（go test ./... 不跨模块边界）
 ```
 
 `check.sh` 在 CI 里跑：核心模块图不超过 3 个模块、核心不依赖任何集成模块、
 registry 与基础包零第三方依赖、`init()` 只出现在集成包里、根包公开 API 不超过 15 个、
 集成包必须导出 `New` 且不许 import 根包、**每个配置字段都写进了 `docs/config.md`**。
+
+`mutate.sh` 不在 CI 里（要几分钟，而且要改工作区），是改完安全或生命周期相关的
+代码之后手动跑一次的。它把每条承诺对应的代码改坏，看有没有测试会失败——
+活下来的变异 = 一条没有牙齿的承诺：代码写着、文档写着，改坏了却没人知道。
 
 `release.sh` 打 tag：多模块仓库每个 module 有自己的 tag，
 发布前要把开发用的 `replace` 换成真实版本号，且必须按依赖顺序发。

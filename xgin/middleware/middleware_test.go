@@ -482,3 +482,27 @@ func TestSnapshotBody_预读时的错误要接回下游(t *testing.T) {
 		t.Errorf("预读时撞上的错误也要还给下游，got=%v", err)
 	}
 }
+
+func TestLog_查询串一个字节都不进日志(t *testing.T) {
+	// 访问日志记的是 URL.Path，不含查询串——GET /login?token=hunter2
+	// 这种请求里，凭证就在 URL 上。改成 RequestURI 或者 URL.String()
+	// 看着都像是「把日志记全一点」，实际是把凭证明文写进日志，
+	// 而且不会有任何迹象。这条没有测试盯着的话，迟早会被顺手改掉
+	lines := capture(t)
+	serve(t, get("/hello/42?token=hunter2&password=s3cret"), []gin.HandlerFunc{Log()},
+		func(c *gin.Context) { c.String(200, "ok") })
+
+	got := lines()
+	if len(got) != 1 {
+		t.Fatalf("应记一条，got=%v", got)
+	}
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"hunter2", "s3cret", "token=", "password="} {
+		if bytes.Contains(raw, []byte(leaked)) {
+			t.Errorf("查询串里的 %q 出现在了日志里: %s", leaked, raw)
+		}
+	}
+}

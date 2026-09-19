@@ -145,6 +145,10 @@ mutate "请求头里的凭证被遮掉" xgin/middleware/redact.go ./xgin 'TestRe
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('\t\tif set[strings.ToLower(k)] {\n\t\t\tattrs = append(attrs, slog.String(k, Redacted))\n\t\t\tcontinue\n\t\t}\n',''))
 PY
+mutate "查询串不进访问日志" xgin/middleware/log.go ./xgin 'TestLog' <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+open(p,'w',encoding='utf-8').write(s.replace('"path", c.Request.URL.Path,','"path", c.Request.URL.RequestURI(),'))
+PY
 mutate "请求体只缓存前缀" xgin/middleware/log.go ./xgin 'TestSnapshotBody' <<'PY'
 import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 open(p,'w',encoding='utf-8').write(s.replace('io.ReadAll(io.LimitReader(req.Body, maxRequestBody))','io.ReadAll(req.Body)',1))
