@@ -119,15 +119,23 @@ func (g *XGin) build() {
 		}
 		if g.settings.metric {
 			e.Use(middleware.Metric())
+		}
+		e.Use(middleware.Recover(g.recover))
+		e.Use(g.extra...)
+
+		// 路由一律注册在所有中间件之后。
+		//
+		// gin 在注册路由的那一刻就把处理链定死了：那之后再 Use 的中间件
+		// 对它不生效。指标端点原先注册在 g.extra 之前，于是使用者用
+		// WithMiddleware 挂的统一鉴权对业务路由生效、对 /metrics 不生效——
+		// 一个以为被保护起来的端点其实是敞开的。
+		if g.settings.metric {
 			// 每次请求再取 handler，不在这里定死：装配可能发生在 xmetric
 			// 初始化之前，那时拿到的是兜底 registry，/metrics 会一直是空的
 			e.GET(g.settings.metricPath, func(c *gin.Context) {
 				xmetric.Handler().ServeHTTP(c.Writer, c.Request)
 			})
 		}
-		e.Use(middleware.Recover(g.recover))
-
-		e.Use(g.extra...)
 		for _, f := range g.routes {
 			f(e)
 		}

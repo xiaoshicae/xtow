@@ -218,21 +218,39 @@ func snapshotBody(req *http.Request) []byte {
 	// 已经消失了，下游 handler 拿到的是个缺头的 body——
 	// 记日志这件事不该有能力改变请求本身。
 	head, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBody))
-	req.Body = prefixedBody{
-		Reader: io.MultiReader(bytes.NewReader(head), req.Body),
-		Closer: req.Body,
-	}
+	req.Body = &prefixedBody{prefix: head, rest: req.Body, preErr: err}
 	if err != nil {
-		return nil // 读不全就不记，但下游拿到的仍是完整的请求体
+		return nil // 读不全就不记，但下游拿到的仍是完整的请求体和那个错误
 	}
 	return head
 }
 
-// prefixedBody 把已经读走的前缀接回请求体前面。
+// prefixedBody 把已经读走的前缀接回请求体前面，连同预读时撞上的错误。
 //
-// Close 仍然落到原始 body 上——它才是真正持有连接的那个，
+// 错误必须接回去。一个合法的 Reader 可以先返回「部分数据 + 错误」，
+// 下一次调用再返回 EOF——只把字节接回去的话，下游读到的是
+// 「前缀 + EOF」，一个被截断的请求看上去和一个正常的请求一模一样，
+// 业务层据此判断「收全了」。记日志这件事不该有能力改变这个判断。
+//
+// Close 仍然落到原始 body 上：它才是真正持有连接的那个，
 // 换成 io.NopCloser 就等于把 http.Request 的关闭语义吃掉了。
 type prefixedBody struct {
-	io.Reader
-	io.Closer
+	prefix []byte
+	off    int
+	rest   io.ReadCloser
+	preErr error // 预读时撞上的错误，前缀读完之后交给下游
 }
+
+func (b *prefixedBody) Read(p []byte) (int, error) {
+	if b.off < len(b.prefix) {
+		n := copy(p, b.prefix[b.off:])
+		b.off += n
+		return n, nil
+	}
+	if b.preErr != nil {
+		return 0, b.preErr
+	}
+	return b.rest.Read(p)
+}
+
+func (b *prefixedBody) Close() error { return b.rest.Close() }

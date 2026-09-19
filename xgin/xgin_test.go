@@ -623,3 +623,25 @@ func TestStop_超时后强制断掉在途连接(t *testing.T) {
 		t.Error("超时之后在途请求仍在继续——框架接着就去关数据库了，它会摸到已关闭的连接池")
 	}
 }
+
+func TestBuild_metrics端点也走用户中间件(t *testing.T) {
+	// gin 在注册路由那一刻就把处理链定死了。指标端点原先注册在
+	// e.Use(g.extra...) 之前，于是 WithMiddleware 挂的统一鉴权
+	// 对业务路由生效、对 /metrics 不生效——一个以为被保护的端点其实敞着
+	withConfig(t, nil)
+	auth := func(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) }
+
+	e := New(WithLog(false)).
+		WithMiddleware(auth).
+		WithRoutes(func(e *gin.Engine) {
+			e.GET("/biz", func(c *gin.Context) { c.Status(200) })
+		}).Engine()
+
+	for _, path := range []string{"/biz", "/metrics"} {
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s 该被鉴权中间件拦住，got=%d", path, w.Code)
+		}
+	}
+}

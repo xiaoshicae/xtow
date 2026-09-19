@@ -35,8 +35,16 @@ func New(cfg Config) (*resty.Client, io.Closer, error) {
 		return nil, nil, fmt.Errorf("xhttp: invalid config: %w", err)
 	}
 
-	raw := &http.Client{Transport: buildTransport(cfg), Timeout: cfg.Timeout}
-	client := resty.NewWithClient(raw)
+	// 自己抓住连接池那一层，不指望 http.Client.CloseIdleConnections 找得到它。
+	//
+	// 那个方法是靠类型断言往下找的：链路开着时中间隔着 otelhttp.Transport，
+	// 而它没有实现这个方法，断言到那里就断了——整条调用变成空操作，
+	// 而链路默认是开着的。自己持有，关的时候直接关它。
+	pool := tunedTransport(cfg)
+	client := resty.NewWithClient(&http.Client{
+		Transport: traced(cfg, pool),
+		Timeout:   cfg.Timeout,
+	})
 
 	if cfg.RetryCount > 0 {
 		client.SetRetryCount(cfg.RetryCount).
@@ -57,23 +65,22 @@ func New(cfg Config) (*resty.Client, io.Closer, error) {
 		installMetrics(client, hist)
 	}
 
-	return client, &clientCloser{raw: raw}, nil
+	return client, &clientCloser{pool: pool}, nil
 }
 
-// buildTransport 组装出站的 Transport 链
+// traced 在连接池外面包上链路那两层
 //
 //	client → xtrace.Transport → otelhttp.Transport → 调好参数的 http.Transport
 //
 // xtrace.Transport 把目标 host 写进 ctx，按域名透传 Header 的规则才能生效。
 // otelhttp 无论链路是否采样都会调用全局 Propagator 注入，所以不需要
 // 「链路关了就自己注入」的第二种包装——这一点由本包的测试钉住。
-func buildTransport(cfg Config) http.RoundTripper {
-	base := tunedTransport(cfg)
+func traced(cfg Config, pool http.RoundTripper) http.RoundTripper {
 	if !cfg.Trace {
-		return base
+		return pool
 	}
 	return &xtrace.Transport{
-		Next: otelhttp.NewTransport(base, otelhttp.WithSpanNameFormatter(spanName)),
+		Next: otelhttp.NewTransport(pool, otelhttp.WithSpanNameFormatter(spanName)),
 	}
 }
 
@@ -126,10 +133,13 @@ func retryOnlyIdempotent(resp *resty.Response, err error) bool {
 	return false
 }
 
-type clientCloser struct{ raw *http.Client }
+// clientCloser 持有连接池本身，而不是外面那个 http.Client
+type clientCloser struct{ pool http.RoundTripper }
 
 func (c *clientCloser) Close() error {
-	c.raw.CloseIdleConnections()
+	if p, ok := c.pool.(interface{ CloseIdleConnections() }); ok {
+		p.CloseIdleConnections()
+	}
 	return nil
 }
 

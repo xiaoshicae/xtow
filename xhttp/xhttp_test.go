@@ -3,6 +3,9 @@ package xhttp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -406,3 +409,124 @@ type discardLogger struct{}
 func (discardLogger) Errorf(string, ...any) {}
 func (discardLogger) Warnf(string, ...any)  {}
 func (discardLogger) Debugf(string, ...any) {}
+
+func TestNew_关闭时真的清掉空闲连接(t *testing.T) {
+	// 回归用例。上一版让 Closer 去调 http.Client.CloseIdleConnections()，
+	// 那个方法靠类型断言往下找；链路开着时中间隔着 otelhttp.Transport，
+	// 而它没实现这个方法，断言到那里就断了——整条调用是空操作，
+	// 而链路默认就是开着的。只断言「包装层实现了这个方法」测不出来，
+	// 得看连接有没有真的被释放
+	for _, trace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("Trace=%v", trace), func(t *testing.T) {
+			var idle atomic.Int64
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(200)
+			}))
+			// 必须在 Start 之前设：起来之后再改，服务端协程已经在读它了
+			srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+				switch s {
+				case http.StateIdle:
+					idle.Add(1)
+				case http.StateClosed, http.StateHijacked:
+					idle.Add(-1)
+				}
+			}
+			srv.Start()
+			defer srv.Close()
+
+			c := DefaultConfig()
+			c.Trace = trace
+			client, closer, err := New(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := client.R().Get(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp
+
+			waitFor(t, func() bool { return idle.Load() > 0 }, "请求完成后该有一个空闲连接")
+			if err := closer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { return idle.Load() == 0 }, "关闭之后空闲连接该被释放")
+		})
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal(what)
+}
+
+func TestMetric_重试耗时算整次逻辑请求(t *testing.T) {
+	// resty 每次尝试都会重置 Request.Time，resp.Time() 只是最后一次尝试的耗时。
+	// 计数是按「一次逻辑请求」记的，耗时也必须是——否则故障时请求数照涨、
+	// 耗时却纹丝不动，监控看上去异常地健康
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError) // 第一次失败，触发重试
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	const backoff = 150 * time.Millisecond
+	c := DefaultConfig()
+	c.Trace, c.Metric = false, false
+	c.RetryCount, c.RetryWaitTime, c.RetryMaxWaitTime = 2, backoff, backoff
+	client, closer, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	hist := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "probe_duration_seconds", Buckets: []float64{0.001, 10}},
+		[]string{"method", "host", "status"})
+	installMetrics(client, hist)
+	client.AddRetryCondition(func(r *resty.Response, _ error) bool { return r.StatusCode() >= 500 })
+
+	if _, err := client.R().Get(srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() < 2 {
+		t.Fatalf("应当重试过，服务端只收到 %d 次", hits.Load())
+	}
+
+	got := histogramSum(t, hist)
+	if got < backoff.Seconds() {
+		t.Errorf("耗时该覆盖整次逻辑请求（含退避 %v），got=%.3fs", backoff, got)
+	}
+}
+
+func histogramSum(t *testing.T, h *prometheus.HistogramVec) float64 {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	if err := reg.Register(h); err != nil {
+		t.Fatal(err)
+	}
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			if m.GetHistogram() != nil {
+				return m.GetHistogram().GetSampleSum()
+			}
+		}
+	}
+	t.Fatal("没采到直方图样本")
+	return 0
+}

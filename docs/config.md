@@ -94,7 +94,7 @@ XMetric:
 XGorm:
   Driver: postgres         # mysql / postgres 内置，默认 postgres；其余驱动见下
   DSN: "${DB_DSN}"         # 必填
-  DialTimeout: 500ms
+  DialTimeout: 500ms       # 也是 MySQL 那一小段不可取消的建连的上限，见下
   MaxOpenConns: 50
   MaxIdleConns: 50         # 配 0 就是一条空闲连接都不留
   MaxLifetime: 5m
@@ -113,6 +113,13 @@ XGorm:
     IdleInTxTimeout: 0s
     Params: {}             # 任意 PG 运行时参数，同名时以它为准
 ```
+
+MySQL 有一处已知限制：GORM 的 MySQL Dialector 在初始化时会查一次
+`SELECT VERSION()`，驱动那行写死了 `context.Background()`，所以这一段
+建连不受退出信号控制，上限是 `DialTimeout`（默认 500ms）。
+不关掉它是因为 GORM 靠这个版本号决定 MariaDB / MySQL 5.7 上的一堆行为
+（改索引、改列、`FOR SHARE`、`RETURNING`），为省这半秒换一组静默的行为变化
+不划算。在意的话把 `DialTimeout` 调小。PostgreSQL 与 ClickHouse 没有这个问题。
 
 ### 其它驱动
 

@@ -436,3 +436,18 @@ func TestLoad_默认值的覆盖语义(t *testing.T) {
 		}
 	})
 }
+
+func TestLoad_重复的顶层key要报错(t *testing.T) {
+	// 转成 map 的那一刻重复信息就没了，后面的严格解码再也看不见它——
+	// 于是同一个块写两遍能正常加载，静默地以后一份为准
+	list, c := comps(t)
+	err := Load(write(t, "Demo:\n  Retries: 1\nOther: {}\nDemo:\n  Retries: 2\n"), list)
+	if err == nil {
+		t.Fatalf("重复的顶层 key 应当报错，实际解出 Retries=%d", c.Retries)
+	}
+	for _, want := range []string{"Demo", "duplicate", "line 4", "line 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误里该出现 %q（要能定位到行），got=%v", want, err)
+		}
+	}
+}

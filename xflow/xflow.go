@@ -179,13 +179,26 @@ func (f *Flow[T]) Execute(ctx context.Context, data T) *Result {
 		}
 
 		se := &StepError{Processor: p.Name(), Dependency: p.Dependency(), Err: err}
+
 		if p.Dependency() == Weak {
 			res.Skipped = append(res.Skipped, se)
 			done = append(done, p) // 失败的弱依赖也可能留下了副作用，同样要回滚
-			continue
+
+			// 弱依赖失败只记一笔继续走——除非它是被取消带下水的。
+			//
+			// 取消只在每步开始前查一次的话，最后一步撞上取消就查不到了：
+			// 它的 context.Canceled 走进这个「跳过」分支，循环随即结束，
+			// 于是一个被取消的流程报成了 Success，还一步都没回滚。
+			if ctx.Err() == nil {
+				continue
+			}
+			res.Err = fmt.Errorf("xflow: flow %q canceled while running step %q: %w",
+				f.name, p.Name(), ctx.Err())
+		} else {
+			// 强依赖失败：这一步没成，不纳入回滚范围
+			res.Err = se
 		}
 
-		res.Err = se
 		f.rollback(ctx, data, done, res, m)
 		f.notifyFlow(ctx, m, res, start)
 		return res

@@ -222,21 +222,73 @@ func postgresConnInfo(dsn string) ConnInfo {
 	return info
 }
 
-// parseKV 粗解 libpq 的 key=value DSN，只取用得上的几个 key
+// parseKV 解 libpq 的 key=value DSN，只取用得上的几个 key
 //
-// 故意不取 password：这个结果是给日志用的，能取到就意味着可能被打出去
+// 故意不取 password：这个结果是给日志用的，能取到就意味着可能被打出去。
+//
+// 必须按 libpq 的引号规则切，不能用 strings.Fields。密码里带空格是完全
+// 合法的（写成 password='a b'），而按空白切的话，引号里的内容会被当成
+// 独立的 key=value 读出来：
+//
+//	password='prefix host=SECRET'   →   host 被解成 SECRET
+//
+// 那个值随后会写进建连日志。这个包一开始就决定不打印 DSN，就是为了
+// 不必做「从日志里把密码抠掉」这种永远做不干净的活——从密码里抠出一段
+// 再打出去，是同一个洞换了个入口。
 func parseKV(dsn string) map[string]string {
 	out := map[string]string{}
-	for _, f := range strings.Fields(dsn) {
-		k, v, ok := strings.Cut(f, "=")
+	for _, tok := range splitKV(dsn) {
+		k, v, ok := strings.Cut(tok, "=")
 		if !ok {
 			continue
 		}
 		switch k {
 		case "host", "port", "dbname":
-			out[k] = strings.Trim(v, "'")
+			out[k] = v
 		}
 	}
+	return out
+}
+
+// splitKV 把 libpq 的 DSN 切成一个个 key=value，认单引号和反斜杠转义。
+//
+// 与 quoteKV 是一对：那边负责写出去，这边负责读回来，规则必须对得上。
+func splitKV(dsn string) []string {
+	var (
+		out     []string
+		cur     strings.Builder
+		quoted  bool
+		escaped bool
+	)
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+
+	for i := 0; i < len(dsn); i++ {
+		c := dsn[i]
+		switch {
+		case escaped:
+			cur.WriteByte(c)
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '\'':
+			quoted = !quoted
+		case !quoted && (c == ' ' || c == '\t' || c == '\n' || c == '\r'):
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	// 引号没闭合说明 DSN 本身有问题。这时候切出来的东西没有一个可信，
+	// 宁可什么都不报——日志里少一个字段，好过多一段密码
+	if quoted {
+		return nil
+	}
+	flush()
 	return out
 }
 

@@ -257,3 +257,27 @@ func TestResolveDSN_合法的百分号转义照常保留(t *testing.T) {
 		t.Error("超时仍该注进去")
 	}
 }
+
+func TestParseKV_密码片段不会被当成连接信息(t *testing.T) {
+	// 密码里带空格是合法的（password='a b'），按空白切的话引号里的内容
+	// 会被当成独立的 key=value 读出来，然后写进建连日志。
+	// 这个包一开始就决定不打印 DSN，从密码里抠出一段再打出去是同一个洞
+	const secret = "SECRET_FRAGMENT"
+	for _, c := range []struct{ name, dsn, addr, db string }{
+		{"密码里含 host=", "host=real.db port=5432 dbname=mydb user=app password='p " + secret + " host=" + secret + "'", "real.db:5432", "mydb"},
+		{"密码里含 dbname=", "user=app password='x dbname=" + secret + "' host=real.db", "real.db", ""},
+		{"密码里有空格", "user=app password='a b' dbname=mydb host=real.db port=5432", "real.db:5432", "mydb"},
+		{"密码里有转义单引号", `user=app password='it\'s host=` + secret + `' host=real.db dbname=mydb`, "real.db", "mydb"},
+		{"引号没闭合就整个放弃", "user=app password='unclosed host=" + secret, "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			info := postgresConnInfo(c.dsn)
+			if strings.Contains(info.Addr, secret) || strings.Contains(info.DB, secret) {
+				t.Fatalf("密码片段进了日志字段：%+v", info)
+			}
+			if info.Addr != c.addr || info.DB != c.db {
+				t.Errorf("got=%+v want addr=%q db=%q", info, c.addr, c.db)
+			}
+		})
+	}
+}

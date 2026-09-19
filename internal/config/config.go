@@ -69,6 +69,7 @@ func Load(path string, list []registry.Component) error {
 
 func topLevel(root *yaml.Node) (map[string]*yaml.Node, error) {
 	out := map[string]*yaml.Node{}
+	lines := map[string]int{} // key → 第一次出现的行号，用来报重复
 	if root.Kind == 0 || len(root.Content) == 0 {
 		return out, nil // 空文件
 	}
@@ -77,7 +78,16 @@ func topLevel(root *yaml.Node) (map[string]*yaml.Node, error) {
 		return nil, fmt.Errorf("top level of the config file must be a mapping")
 	}
 	for i := 0; i+1 < len(doc.Content); i += 2 {
-		out[doc.Content[i].Value] = doc.Content[i+1]
+		key := doc.Content[i]
+		// 重复的顶层 key 直接报错。转成 map 的那一刻重复信息就没了，
+		// 后面的严格解码再也看不见它——于是同一个块写两遍能正常加载，
+		// 静默地以后一份为准，而写的人多半以为两份都生效了
+		if prev, dup := lines[key.Value]; dup {
+			return nil, fmt.Errorf("duplicate top-level key %q at line %d (first seen at line %d)",
+				key.Value, key.Line, prev)
+		}
+		lines[key.Value] = key.Line
+		out[key.Value] = doc.Content[i+1]
 	}
 	return out, nil
 }

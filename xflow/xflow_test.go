@@ -566,3 +566,65 @@ func TestSlogMonitor_默认级别下不写逐步日志(t *testing.T) {
 		t.Errorf("流程结果任何时候都该看得到\n实际=\n%s", buf.String())
 	}
 }
+
+// cancelingStep 在自己执行期间取消父 ctx，并把取消如实返回
+type cancelingStep struct {
+	name   string
+	dep    Dependency
+	cancel context.CancelFunc
+}
+
+func (s *cancelingStep) Name() string           { return s.name }
+func (s *cancelingStep) Dependency() Dependency { return s.dep }
+func (s *cancelingStep) Process(ctx context.Context, d *data) error {
+	s.cancel()
+	return ctx.Err()
+}
+func (s *cancelingStep) Rollback(_ context.Context, d *data) error {
+	d.record(&d.back, s.name)
+	return nil
+}
+
+func TestExecute_最后一步被取消不能报成功(t *testing.T) {
+	// 取消只在每步开始前查一次的话，最后一步撞上取消就查不到了：
+	// 它的 context.Canceled 走进「弱依赖跳过」分支，循环随即结束，
+	// 于是一个被取消的流程报成了 Success，还一步都没回滚
+	withConfig(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &data{}
+
+	res := New("下单", ok("扣券"), &cancelingStep{name: "发通知", dep: Weak, cancel: cancel}).
+		Execute(ctx, d)
+
+	if res.Success() {
+		t.Fatalf("流程被取消了，不该报成功：%v", res)
+	}
+	if !errors.Is(res.Err, context.Canceled) {
+		t.Errorf("该如实说是被取消，got=%v", res.Err)
+	}
+	if !res.Rolled {
+		t.Error("取消之后已执行的步骤要回滚")
+	}
+	if got := d.backList(); len(got) != 2 {
+		t.Errorf("失败的弱依赖也在回滚范围内，got=%v", got)
+	}
+}
+
+func TestExecute_中间一步弱依赖被取消也中断(t *testing.T) {
+	withConfig(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &data{}
+
+	res := New("下单",
+		ok("扣券"),
+		&cancelingStep{name: "发通知", dep: Weak, cancel: cancel},
+		ok("不该跑到"),
+	).Execute(ctx, d)
+
+	if res.Success() {
+		t.Fatal("流程被取消了，不该报成功")
+	}
+	if got := d.doneList(); strings.Contains(strings.Join(got, ","), "不该跑到") {
+		t.Errorf("取消之后不该再往下走，got=%v", got)
+	}
+}

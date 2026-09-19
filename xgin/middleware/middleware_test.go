@@ -446,3 +446,39 @@ func TestSnapshotBody_Close落到原始body上(t *testing.T) {
 		t.Error("Close 该落到原始 body 上")
 	}
 }
+
+// partialThenEOF 先返回「部分数据 + 错误」，下一次调用返回 EOF。
+// 这是合法的 io.Reader 行为，也是一个被截断的请求在网络层的样子。
+type partialThenEOF struct {
+	data []byte
+	done bool
+	err  error
+}
+
+func (r *partialThenEOF) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+func (r *partialThenEOF) Close() error { return nil }
+
+func TestSnapshotBody_预读时的错误要接回下游(t *testing.T) {
+	// 只把字节接回去的话，下游读到的是「前缀 + EOF」——一个被截断的请求
+	// 看上去和一个正常的请求一模一样，业务层据此判断「收全了」
+	boom := errors.New("connection reset by peer")
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Body, req.GetBody = &partialThenEOF{data: []byte("partial"), err: boom}, nil
+	req.Header.Set("Content-Type", "application/json")
+
+	snapshotBody(req)
+
+	got, err := io.ReadAll(req.Body)
+	if string(got) != "partial" {
+		t.Errorf("已经读到的字节要还给下游，got=%q", got)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("预读时撞上的错误也要还给下游，got=%v", err)
+	}
+}

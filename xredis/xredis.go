@@ -58,6 +58,14 @@ func New(ctx context.Context, cfg ClientConfig) (*redis.Client, io.Closer, error
 		MaxRetries:      cfg.MaxRetries,
 		MinRetryBackoff: cfg.MinRetryBackoff,
 		MaxRetryBackoff: cfg.MaxRetryBackoff,
+
+		// 让请求的 context 管住 socket 读写。
+		//
+		// go-redis 默认不这么做：不开的话，每个命令用的是 ReadTimeout /
+		// WriteTimeout 这组固定值，调用方给的 deadline 只是摆设——
+		// 一个 20ms 超时的请求照样会在一个慢 Redis 上等满几百毫秒，
+		// 上游的超时预算和级联保护跟着一起失效。
+		ContextTimeoutEnabled: true,
 	})
 
 	// 这之后任何一步失败都要关掉 client，否则漏一个连接池

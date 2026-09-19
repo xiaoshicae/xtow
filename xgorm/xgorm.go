@@ -50,6 +50,17 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	// 干等满 DSN 的 connect_timeout，哪怕 ctx 早就被取消了（实测 3 秒）。
 	// 关掉之后 gorm.Open 只做装配、立刻返回，全部建连都走下面那次
 	// ctx-aware 的 ping —— 取消得了、也重试得了。
+	//
+	// MySQL 还剩一小段管不到：它的 Dialector 在 Initialize 里会查一次
+	// SELECT VERSION()，而驱动那行写死了 context.Background()
+	// （gorm.io/driver/mysql v1.6.0，mysql.go:130）。于是连不上的 MySQL
+	// 地址在这里仍会等一次建连，上限是我们注入 DSN 的 DialTimeout
+	// （默认 500ms，实测就是这个数）。
+	//
+	// 不用 SkipInitializeWithVersion 关掉它：GORM 靠这个版本号决定
+	// MariaDB / MySQL 5.7 上的一堆行为（改索引、改列、FOR SHARE、
+	// RETURNING 支不支持）。为了省 500ms 去换一组静默的行为变化，
+	// 对做迁移的人是更糟的交易。真在意这半秒的话，把 DialTimeout 调小。
 	gormCfg := &gorm.Config{DisableAutomaticPing: true}
 	if cfg.Log {
 		gormCfg.Logger = newGormLogger(cfg)
