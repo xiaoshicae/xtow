@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -18,11 +17,6 @@ const (
 	kindHistogram = "h"
 )
 
-var (
-	collectors sync.Map   // map[string]prometheus.Collector
-	createMu   sync.Mutex // 保证「创建 + 注册 + 入缓存」是一步
-)
-
 // Tag 指标标签键值对
 type Tag struct {
 	Name  string
@@ -32,40 +26,44 @@ type Tag struct {
 // T 创建标签
 func T(name, value string) Tag { return Tag{Name: name, Value: value} }
 
+// 下面这些快捷方法都先取一次 active()，随后整次操作都用这一个实例：
+// 中途换实例时，这次打点要么完整落在旧的上、要么完整落在新的上，
+// 不会出现「collector 从旧实例取、值往新实例记」这种两边都不对的情况。
+
 // CounterInc 计数器 +1
 func CounterInc(name string, tags ...Tag) {
 	names, values := parseTags(tags)
-	counterOf(name, names).WithLabelValues(values...).Inc()
+	active().counterOf(name, names).WithLabelValues(values...).Inc()
 }
 
 // CounterAdd 计数器 +v（v 必须 >= 0）
 func CounterAdd(name string, v float64, tags ...Tag) {
 	names, values := parseTags(tags)
-	counterOf(name, names).WithLabelValues(values...).Add(v)
+	active().counterOf(name, names).WithLabelValues(values...).Add(v)
 }
 
 // GaugeSet 设置仪表盘值
 func GaugeSet(name string, v float64, tags ...Tag) {
 	names, values := parseTags(tags)
-	gaugeOf(name, names).WithLabelValues(values...).Set(v)
+	active().gaugeOf(name, names).WithLabelValues(values...).Set(v)
 }
 
 // GaugeInc 仪表盘 +1
 func GaugeInc(name string, tags ...Tag) {
 	names, values := parseTags(tags)
-	gaugeOf(name, names).WithLabelValues(values...).Inc()
+	active().gaugeOf(name, names).WithLabelValues(values...).Inc()
 }
 
 // GaugeDec 仪表盘 -1
 func GaugeDec(name string, tags ...Tag) {
 	names, values := parseTags(tags)
-	gaugeOf(name, names).WithLabelValues(values...).Dec()
+	active().gaugeOf(name, names).WithLabelValues(values...).Dec()
 }
 
 // HistogramObserve 直方图观测，单位秒
 func HistogramObserve(name string, v float64, tags ...Tag) {
 	names, values := parseTags(tags)
-	histogramOf(name, names).WithLabelValues(values...).Observe(v)
+	active().histogramOf(name, names).WithLabelValues(values...).Observe(v)
 }
 
 // parseTags 取出标签名和值，按名字排序，让不同书写顺序命中同一个缓存
@@ -115,23 +113,23 @@ func cacheKey(kind, name string, labelNames []string) string {
 // 注册回来的类型与预期不符，说明这个指标名已经被注册成别的类型了
 // （比如先 Counter 后 Gauge）。此时本实例不在 registry 里，
 // 记录的值永远导不出去——必须说出来，否则是一次完全静默的数据丢失。
-func collectorOf[T prometheus.Collector](key, name string, build func() T) T {
-	if v, ok := collectors.Load(key); ok {
+func collectorOf[T prometheus.Collector](m *Metrics, key, name string, build func() T) T {
+	if v, ok := m.collectors.Load(key); ok {
 		if typed, ok := v.(T); ok {
 			return typed
 		}
 	}
 
-	createMu.Lock()
-	defer createMu.Unlock()
-	if v, ok := collectors.Load(key); ok {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	if v, ok := m.collectors.Load(key); ok {
 		if typed, ok := v.(T); ok {
 			return typed
 		}
 	}
 
 	c := build()
-	registered, err := Register(c)
+	registered, err := register(m.Registry, c)
 	switch typed, ok := registered.(T); {
 	case err != nil:
 		// 只能记一笔：打点是运行期调用，这里没有「让启动失败」这个选项
@@ -142,52 +140,49 @@ func collectorOf[T prometheus.Collector](key, name string, build func() T) T {
 		logNameConflict(name, registered)
 	}
 
-	collectors.Store(key, c)
+	m.collectors.Store(key, c)
 	return c
 }
 
-func counterOf(name string, labelNames []string) *prometheus.CounterVec {
-	return collectorOf(cacheKey(kindCounter, name, labelNames), name, func() *prometheus.CounterVec {
+func (m *Metrics) counterOf(name string, labelNames []string) *prometheus.CounterVec {
+	return collectorOf(m, cacheKey(kindCounter, name, labelNames), name, func() *prometheus.CounterVec {
 		return prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace:   Namespace(),
+			Namespace:   m.cfg.Namespace,
 			Name:        name,
 			Help:        name,
-			ConstLabels: ConstLabels(),
+			ConstLabels: labelsOf(m.cfg.ConstLabels),
 		}, labelNames)
 	})
 }
 
-func gaugeOf(name string, labelNames []string) *prometheus.GaugeVec {
-	return collectorOf(cacheKey(kindGauge, name, labelNames), name, func() *prometheus.GaugeVec {
+func (m *Metrics) gaugeOf(name string, labelNames []string) *prometheus.GaugeVec {
+	return collectorOf(m, cacheKey(kindGauge, name, labelNames), name, func() *prometheus.GaugeVec {
 		return prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace:   Namespace(),
+			Namespace:   m.cfg.Namespace,
 			Name:        name,
 			Help:        name,
-			ConstLabels: ConstLabels(),
+			ConstLabels: labelsOf(m.cfg.ConstLabels),
 		}, labelNames)
 	})
 }
 
-func histogramOf(name string, labelNames []string) *prometheus.HistogramVec {
-	return collectorOf(cacheKey(kindHistogram, name, labelNames), name, func() *prometheus.HistogramVec {
+func (m *Metrics) histogramOf(name string, labelNames []string) *prometheus.HistogramVec {
+	return collectorOf(m, cacheKey(kindHistogram, name, labelNames), name, func() *prometheus.HistogramVec {
 		return prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace:   Namespace(),
+			Namespace:   m.cfg.Namespace,
 			Name:        name,
 			Help:        name,
-			Buckets:     slices.Clone(active().cfg.HistogramBuckets),
-			ConstLabels: ConstLabels(),
+			Buckets:     slices.Clone(m.cfg.HistogramBuckets),
+			ConstLabels: labelsOf(m.cfg.ConstLabels),
 		}, labelNames)
 	})
 }
 
-// clearCollectors 清空缓存，返回清掉的数量
-func clearCollectors() int {
+// cachedCount 缓存里有多少个 collector。
+// Install 用它判断「换实例之前记过点没有」，那些值留在上一个 Registry 里导不出去
+func (m *Metrics) cachedCount() int {
 	n := 0
-	collectors.Range(func(k, _ any) bool {
-		collectors.Delete(k)
-		n++
-		return true
-	})
+	m.collectors.Range(func(any, any) bool { n++; return true })
 	return n
 }
 

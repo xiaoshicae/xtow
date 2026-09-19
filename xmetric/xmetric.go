@@ -32,6 +32,15 @@ type Metrics struct {
 
 	// logCounter 日志错误计数器，未开启该特性时为 nil
 	logCounter *prometheus.CounterVec
+
+	// collectors 快捷方法（CounterInc / GaugeSet / …）建过的 collector，
+	// 按「类型 + 指标名 + 标签名」缓存，见 shortcut.go 的说明。
+	//
+	// 跟着实例走而不是做成包级的：collector 是注册在本实例的 Registry 上的，
+	// 换了实例，旧的那些就再也导不出去了。缓存是包级的时候，
+	// Install 必须记得去清另一处的全局状态，忘了就是静默的数据丢失。
+	collectors sync.Map   // map[string]prometheus.Collector
+	createMu   sync.Mutex // 保证「创建 + 注册 + 入缓存」是一步
 }
 
 // New 按配置构造指标设施，不触碰任何全局变量。
@@ -76,14 +85,21 @@ func (m *Metrics) Install() {
 	}
 
 	mu.Lock()
+	prev := current
 	current = m
+	if prev == nil {
+		prev = fallback // 之前的打点都落在兜底实例上
+	}
 	mu.Unlock()
 
-	// 换了 registry，缓存里的 collector 还挂在旧的那个上，
-	// 通过它们记的值不会出现在 /metrics 里。清掉，让下次打点重新建。
-	if n := clearCollectors(); n > 0 {
-		slog.Warn("metrics were recorded before xmetric was initialized; those values went to a temporary registry and will not be exported",
-			"metrics", n)
+	// 换实例之前记的点是记在上一个 Registry 上的，不会出现在 /metrics 里。
+	// 缓存已经跟着实例走，不需要清任何东西——但这件事仍然要说出来，
+	// 否则就是一次完全静默的数据丢失。
+	if prev != nil && prev != m {
+		if n := prev.cachedCount(); n > 0 {
+			slog.Warn("metrics were recorded before xmetric was initialized; those values went to a temporary registry and will not be exported",
+				"metrics", n)
+		}
 	}
 }
 
@@ -115,12 +131,20 @@ func active() *Metrics {
 		// 兜底实例不采集 Go / 进程指标——那些由真正的实例负责，
 		// 这里只是给早到的打点一个不会丢的落点，没有会失败的步骤。
 		reg := prometheus.NewRegistry()
-		fallback = &Metrics{
+		f := &Metrics{
 			Registry: reg,
 			Handler:  promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true}),
 			cfg:      DefaultConfig(),
 		}
+		// 赋值也走 mu：Install 要读它来数「初始化之前记了多少点」，
+		// 两边不用同一把锁就是一次数据竞争
+		mu.Lock()
+		fallback = f
+		mu.Unlock()
 	})
+
+	mu.RLock()
+	defer mu.RUnlock()
 	return fallback
 }
 

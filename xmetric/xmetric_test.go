@@ -1,12 +1,14 @@
 package xmetric
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,7 +42,6 @@ func install(t *testing.T, mutate func(*Config)) *Metrics {
 		mu.Lock()
 		current = oldCurrent
 		mu.Unlock()
-		clearCollectors()
 	})
 
 	m.Install()
@@ -204,9 +205,25 @@ func TestRegister_重复注册复用已有实例(t *testing.T) {
 	}
 }
 
-func TestInstall_清掉初始化前的缓存(t *testing.T) {
-	// 初始化前打的点记在临时 registry 上，缓存留着的话，
-	// 初始化之后的打点还会走那个不会被导出的实例
+// resetFallback 把兜底实例清空重来。
+//
+// 从前测试里写的是 clearCollectors()：缓存那时是包级的，一个测试留下的
+// collector 会串到下一个。现在缓存跟着实例走，要隔离的就是兜底实例本身
+func resetFallback(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		mu.Lock()
+		fallback = nil
+		mu.Unlock()
+		fallbackOnce = sync.Once{}
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+func TestInstall_初始化前的点不会串到新实例(t *testing.T) {
+	// 初始化前打的点记在兜底 registry 上。缓存要是跟实例分家，
+	// 初始化之后的打点会继续走那个不会被导出的 collector
 	mu.Lock()
 	old := current
 	current = nil
@@ -215,9 +232,8 @@ func TestInstall_清掉初始化前的缓存(t *testing.T) {
 		mu.Lock()
 		current = old
 		mu.Unlock()
-		clearCollectors()
 	})
-	clearCollectors()
+	resetFallback(t)
 
 	CounterInc("early") // 走兜底实例
 
@@ -237,9 +253,8 @@ func TestActive_未初始化时不丢不炸(t *testing.T) {
 		mu.Lock()
 		current = old
 		mu.Unlock()
-		clearCollectors()
 	})
-	clearCollectors()
+	resetFallback(t)
 
 	CounterInc("before_init") // 不该 panic
 	if Registry() == nil || Handler() == nil {
@@ -278,7 +293,6 @@ func TestRegister_登记内容与框架对得上(t *testing.T) {
 		current = oldCurrent
 		mu.Unlock()
 		cfg = oldCfg
-		clearCollectors()
 	})
 
 	cfg = DefaultConfig()
@@ -545,5 +559,61 @@ func TestLabelsOf(t *testing.T) {
 	got["a"] = "改掉了"
 	if src["a"] != "1" {
 		t.Error("应是拷贝，不该改动入参")
+	}
+}
+
+func TestInstall_初始化前记的点会被报出来(t *testing.T) {
+	// 缓存跟着实例走之后，Install 不再需要去清另一处全局状态。
+	// 但「换实例之前记的点留在上一个 registry 里、导不出去」这件事
+	// 仍然要说出来，否则就是一次完全静默的数据丢失
+	mu.Lock()
+	old := current
+	current = nil
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		current = old
+		mu.Unlock()
+	})
+	resetFallback(t)
+
+	var buf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	CounterInc("early_one")
+	CounterInc("early_two")
+
+	m, closer, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+	m.Install()
+
+	if !strings.Contains(buf.String(), "will not be exported") {
+		t.Errorf("初始化前记过点，Install 该报出来，实际日志=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "metrics=2") {
+		t.Errorf("该报出有几个指标，实际日志=%q", buf.String())
+	}
+}
+
+func TestInstall_换实例之后缓存跟着换(t *testing.T) {
+	// 缓存曾经是包级的，而 Registry 属于实例：换实例时必须记得
+	// 手动清另一处全局状态，忘了就是静默的数据丢失
+	m1 := install(t, nil)
+	CounterInc("shared_name")
+	if out := dump(t, m1); !strings.Contains(out, "shared_name 1") {
+		t.Fatalf("第一个实例该记到\n%s", out)
+	}
+
+	m2 := install(t, nil)
+	CounterInc("shared_name")
+
+	out := dump(t, m2)
+	if !strings.Contains(out, "shared_name 1") {
+		t.Errorf("换实例之后该记在新 registry 上、且从 1 开始\n实际=\n%s", out)
 	}
 }
