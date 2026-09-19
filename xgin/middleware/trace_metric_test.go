@@ -197,7 +197,27 @@ var _ = http.StatusOK
 func TestMetric_自定义方法收敛成OTHER(t *testing.T) {
 	// 路由已经用模板挡住了 URL 里的 id，方法这一维却是照抄请求的——
 	// 而 HTTP 方法是个自由 token，谁都能发 CUSTOM1、CUSTOM2，
-	// 每来一个新值就多一组时间序列，没有淘汰机制
+	// 每来一个新值就多一组时间序列，没有淘汰机制。
+	//
+	// 这一段走真实的中间件，而不是直接调 normalizeMethod：
+	// 变异测试发现只测那个函数的话，把调用点绕开（`normalizeMethod(m)` → `m`）
+	// 一样能过——函数本身是对的，只是没人用它，而那正是这个 bug 的形状
+	m := withMetrics(t)
+	for _, method := range []string{"CUSTOM1", "FOOBAR", "PROPFIND"} {
+		serve(t, httptest.NewRequest(method, "/hello", nil), []gin.HandlerFunc{Metric()},
+			func(c *gin.Context) { c.Status(200) })
+	}
+	out := scrape(t, m)
+	if !strings.Contains(out, `method="OTHER"`) {
+		t.Errorf("自定义方法该收敛成 OTHER\n实际=\n%s", out)
+	}
+	for _, leaked := range []string{`method="CUSTOM1"`, `method="FOOBAR"`, `method="PROPFIND"`} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("%s 进了标签，时间序列会被请求方撑爆\n实际=\n%s", leaked, out)
+		}
+	}
+
+	// 再单独确认这个函数自己的映射表是对的
 	for _, c := range []struct{ in, want string }{
 		{"GET", "GET"}, {"POST", "POST"}, {"PATCH", "PATCH"}, {"DELETE", "DELETE"},
 		{"CONNECT", "CONNECT"}, {"OPTIONS", "OPTIONS"}, {"TRACE", "TRACE"}, {"HEAD", "HEAD"},
