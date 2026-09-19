@@ -34,6 +34,7 @@ mkdir -p "$TMP/bak"
 
 total=0
 survived=0
+stale=0
 
 # mutate 名字 文件 模块 测试过滤  （python 改写代码从 stdin 读）
 mutate() {
@@ -44,10 +45,13 @@ mutate() {
   cp "$file" "$TMP/orig"
   cp "$file" "$TMP/bak/$(echo "$file" | tr / _)"
   echo "$file" >> "$TMP/touched"
-  python3 "$TMP/m.py" "$file" || { echo "  ? $name（变异没应用上，改坏的位置可能已经不在了）"; cp "$TMP/orig" "$file"; return; }
+  python3 "$TMP/m.py" "$file" || { echo "  ? $name（变异没应用上，改坏的位置可能已经不在了）"; stale=$((stale + 1)); cp "$TMP/orig" "$file"; return; }
 
+  # 改不动和「改坏了没人发现」一样严重：这条承诺这一轮根本没被检查，
+  # 而脚本从前照样报绿。重构挪走了一段代码，对应的变异就这样悄悄失效了
   if cmp -s "$TMP/orig" "$file"; then
     echo "  ? $name（变异没改动任何东西，模式失效了）"
+    stale=$((stale + 1))
     cp "$TMP/orig" "$file"
     return
   fi
@@ -127,9 +131,11 @@ s=s.replace('\t\tfor _, f := range g.routes {','\t\te.Use(g.extra...)\n\t\tfor _
 open(p,'w',encoding='utf-8').write(s)
 PY
 mutate "默认不信任 X-Forwarded-For" xgin/xgin.go ./xgin 'TestBuild|TestLog' <<'PY'
-import sys, re; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
-s=re.sub(r'\t\tif err := e\.SetTrustedProxies\(g\.conf\(\)\.TrustedProxies\); err != nil \{\n(.*\n)*?\t\t\}\n', '', s, count=1)
-open(p,'w',encoding='utf-8').write(s)
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+old='\tif err := e.SetTrustedProxies(c.TrustedProxies); err != nil {'
+assert old in s, 'SetTrustedProxies 的位置变了，这条变异要跟着改'
+i=s.index(old); j=s.index('\t}\n', s.index('_ = e.SetTrustedProxies([]string{})'))+3
+open(p,'w',encoding='utf-8').write(s[:i]+s[j:])
 PY
 
 echo "== 中间件 =="
@@ -201,9 +207,12 @@ open(p,'w',encoding='utf-8').write(s.replace('gormCfg.Logger = logger.Discard','
 PY
 
 echo
-if [ "$survived" -eq 0 ]; then
+bad=$((survived + stale))
+if [ "$bad" -eq 0 ]; then
   echo "✓ $total 条承诺全部有测试盯着"
-else
-  echo "✗ $total 条里有 $survived 条改坏了也没人发现"
-  exit 1
+  exit 0
 fi
+[ "$survived" -eq 0 ] || echo "✗ $survived 条改坏了也没人发现"
+[ "$stale" -eq 0 ] || echo "✗ $stale 条的变异模式已经失效，这一轮根本没检查到（多半是重构挪走了那段代码）"
+echo "  —— 共 $total 条"
+exit 1
