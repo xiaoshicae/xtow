@@ -60,7 +60,7 @@ func TestInstallTracing_六种操作都挂上(t *testing.T) {
 	// 官方插件会把 ClickHouse 驱动编进来，所以回调是自己注册的；
 	// 那就得自己保证一种都没漏——漏了的那种操作从此在链路里是隐形的
 	db := openLazy(t)
-	if err := installTracing(db, connInfo{Driver: "mysql"}); err != nil {
+	if err := installTracing(db, ConnInfo{Driver: "mysql"}); err != nil {
 		t.Fatalf("注册失败：%v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestInstallTracing_六种操作都挂上(t *testing.T) {
 
 func TestSpan_带上连接信息与SQL(t *testing.T) {
 	spans := recording(t)
-	info := connInfo{Driver: "mysql", Addr: "h:3306", DB: "app"}
+	info := ConnInfo{Driver: "mysql", Addr: "h:3306", DB: "app"}
 
 	db := stmtDB(context.Background())
 	startSpan("query", info)(db)
@@ -115,7 +115,7 @@ func TestSpan_不记参数值(t *testing.T) {
 	// 参数里可能有手机号、身份证、令牌，记进链路就跟着采样一路送出去了
 	spans := recording(t)
 	db := stmtDB(context.Background())
-	startSpan("query", connInfo{})(db)
+	startSpan("query", ConnInfo{})(db)
 	db.Statement.SQL.WriteString("SELECT * FROM users WHERE token = ?")
 	db.Statement.Vars = []any{"hunter2"}
 	endSpan(db)
@@ -130,7 +130,7 @@ func TestSpan_不记参数值(t *testing.T) {
 func TestSpan_出错时标红(t *testing.T) {
 	spans := recording(t)
 	db := stmtDB(context.Background())
-	startSpan("query", connInfo{})(db)
+	startSpan("query", ConnInfo{})(db)
 	db.Error = errors.New("连接断了")
 	endSpan(db)
 
@@ -147,7 +147,7 @@ func TestSpan_没查到记录不算错(t *testing.T) {
 	// 「没查到」是正常的业务分支，标成错误会让链路里满屏红色
 	spans := recording(t)
 	db := stmtDB(context.Background())
-	startSpan("query", connInfo{})(db)
+	startSpan("query", ConnInfo{})(db)
 	db.Error = gorm.ErrRecordNotFound
 	endSpan(db)
 
@@ -157,7 +157,7 @@ func TestSpan_没查到记录不算错(t *testing.T) {
 }
 
 func TestSpan_Statement为空时不炸(t *testing.T) {
-	startSpan("query", connInfo{})(&gorm.DB{})
+	startSpan("query", ConnInfo{})(&gorm.DB{})
 	endSpan(&gorm.DB{})
 }
 

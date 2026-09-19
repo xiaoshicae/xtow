@@ -84,6 +84,7 @@ github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
 ├── xhttp                            独立 module，54 个模块
 ├── xredis                           独立 module，55 个模块
 ├── xgorm                            独立 module，62 个模块
+│   └── clickhouse                   独立 module，ClickHouse 驱动（+668 个模块）
 ├── xgin                             独立 module，83 个模块
 └── xginswagger                      独立 module，82 个模块
 ```
@@ -100,6 +101,18 @@ github.com/xiaoshicae/xtow           核心，2 个模块，Go 1.22
 同一条线也用在模块内部：Swagger UI 要把整套前端资源编进二进制，比只用 gin
 多 26 个模块，所以它是 `xginswagger` 而不是 `xgin` 的一部分——
 文档是开发期的事，不该让每个线上服务都背着。
+
+数据库驱动是同一回事，只是更极端：一个只 import `xgorm` 的应用模块图是 65 个，
+加上 ClickHouse 驱动变成 **733** 个，而编译包只从 140 涨到 183——模块图涨得比
+实际编进去的代码多得多，而 MVS 正是按模块图强加版本要求的。所以 mysql 和
+postgres 内置，其余驱动由独立 module 提供，`xgorm` 只留一个注册点：
+
+```go
+import (
+	"github.com/xiaoshicae/xtow/xgorm"
+	_ "github.com/xiaoshicae/xtow/xgorm/clickhouse"   // 用到才付钱
+)
+```
 
 注意**测试依赖也算数**：`go mod tidy` 会把它记成直接依赖，一样进使用者的模块图。
 实测给 `xtrace` 加一个只用于测试的 `otelhttp`，使用者的模块图从 23 涨到 27。

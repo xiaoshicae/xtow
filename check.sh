@@ -33,7 +33,9 @@ echo "✓ registry / xerror / xutil 零第三方依赖"
 # 集成包的 init 只登记不初始化；核心自己则连登记都不该有。
 # 判据是「这个目录调没调 registry.Register」，不是目录名也不是有没有 go.mod：
 # xlog 零依赖留在核心模块里，同样是集成包。
-integrations=$(grep -rl 'registry\.Register(' --include='*.go' . | grep -v '_test.go' | xargs -r -n1 dirname | sort -u)
+# 两个登记入口：组件登记进框架，方言登记进 xgorm。两者都只是「记下来」，
+# 不初始化任何东西，所以放在 init() 里是对的
+integrations=$(grep -rlE 'registry\.Register\(|xgorm\.RegisterDialect\(' --include='*.go' . | grep -v '_test.go' | xargs -r -n1 dirname | sort -u)
 for f in $(grep -rl '^func init()' --include='*.go' . | grep -v '_test.go'); do
   d=$(dirname "$f")
   echo "$integrations" | grep -qx "$d" || fail "$f 有 init()，但它不是集成包（没有 registry.Register）"
@@ -59,6 +61,8 @@ echo "✓ 公开 API：根包 $a（上限 15）、xconfig $x（上限 4）、xcl
 # 不引用根包保证依赖是单向的——集成认识 registry，框架认识 registry，彼此不认识。
 [ -n "$integrations" ] || fail "一个集成包都没找到，第 4 步的判据失效了"
 for d in $integrations; do
+  # 驱动包 import 的是 xgorm 而不是框架，这条对它不适用
+  grep -rq 'registry\.Register(' "$d"/*.go || continue
   ! grep -rq '"github.com/xiaoshicae/xtow"' "$d"/*.go || fail "$d 引用了根包（只能 import registry）"
   # 只认领配置、不造任何东西的包（如 xapp）没有构造器可言，这条对它是空的
   grep -rq 'Init:' "$d"/*.go || continue

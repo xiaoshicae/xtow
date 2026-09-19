@@ -47,6 +47,10 @@ type Config struct {
 // ClientConfig 一个数据库实例的配置
 type ClientConfig struct {
 	// Driver 驱动：mysql / postgres。默认 postgres。
+	//
+	// 其余驱动住在自己的 module 里，匿名 import 即可注册：
+	//
+	//	import _ "github.com/xiaoshicae/xtow/xgorm/clickhouse"
 	Driver Driver `yaml:"Driver"`
 
 	// DSN 连接串，必填。
@@ -170,10 +174,8 @@ func (c ClientConfig) validate() error {
 	if c.DSN == "" {
 		return fmt.Errorf("DSN must not be empty")
 	}
-	switch c.Driver {
-	case DriverMySQL, DriverPostgres:
-	default:
-		return fmt.Errorf("unknown Driver=%q, supported: mysql / postgres", c.Driver)
+	if _, ok := lookupDialect(c.Driver); !ok {
+		return unknownDriver(c.Driver)
 	}
 	if c.MaxOpenConns <= 0 {
 		return fmt.Errorf("MaxOpenConns must be > 0, got=%d", c.MaxOpenConns)

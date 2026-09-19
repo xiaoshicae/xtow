@@ -13,6 +13,9 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 // 本文件里没有任何「DSN 脱敏」的代码，这是有意的。
@@ -24,31 +27,41 @@ import (
 // 这里的做法是根本不打印 DSN。日志只写从 DSN 里解出来的、确定不含凭证的
 // 结构化字段：驱动、地址、库名。没有密码进过日志，也就没有什么需要脱敏。
 
-// connInfo 可以安全写进日志的连接信息
-type connInfo struct {
-	Driver string
-	Addr   string
-	DB     string
+// resolveDSN 把配置里的超时等参数注入 DSN，并解出可安全记录的连接信息
+//
+// 具体怎么解由各驱动自己的 Dialect 决定，见 dialect.go
+func resolveDSN(c ClientConfig) (string, ConnInfo, error) {
+	d, ok := lookupDialect(c.Driver)
+	if !ok {
+		return "", ConnInfo{}, unknownDriver(c.Driver)
+	}
+	if d.Resolve == nil {
+		// 没提供解析逻辑：DSN 原样用，日志里只写得出驱动名
+		return c.DSN, ConnInfo{Driver: string(c.Driver)}, nil
+	}
+	return d.Resolve(c)
 }
 
-// resolveDSN 把配置里的超时等参数注入 DSN，并解出可安全记录的连接信息
-func resolveDSN(c ClientConfig) (string, connInfo, error) {
-	switch c.Driver {
-	case DriverMySQL:
-		return resolveMySQL(c)
-	case DriverPostgres:
-		return resolvePostgres(c)
-	default:
-		return "", connInfo{}, fmt.Errorf("unknown Driver=%q", c.Driver)
-	}
+// unknownDriver 报「不认识的驱动」，并把已注册的列出来
+//
+// 只说「不认识」帮助有限：驱动名写错和忘了 import 对应的模块是两个不同的
+// 问题，把实际注册了哪些列出来，两者一眼可分
+func unknownDriver(name Driver) error {
+	return fmt.Errorf("unknown Driver=%q, registered: %v "+
+		"(drivers other than mysql / postgres live in their own module, import it to register)",
+		name, registeredDrivers())
 }
+
+// openMySQL / openPostgres 内置两个驱动的 Dialector 构造函数
+func openMySQL(dsn string) gorm.Dialector    { return mysql.Open(dsn) }
+func openPostgres(dsn string) gorm.Dialector { return postgres.Open(dsn) }
 
 // resolveMySQL 用驱动自己的解析器处理 DSN，DSN 里已写的超时不会被覆盖
-func resolveMySQL(c ClientConfig) (string, connInfo, error) {
+func resolveMySQL(c ClientConfig) (string, ConnInfo, error) {
 	cfg, err := mysqldriver.ParseDSN(c.DSN)
 	if err != nil {
 		// 不回传驱动的错误：它会把 DSN 片段带在错误信息里，而错误信息会被记下来
-		return "", connInfo{}, fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
+		return "", ConnInfo{}, fmt.Errorf("failed to parse DSN, check the format of %s (details omitted to keep credentials out of logs)", ConfigKey)
 	}
 
 	if cfg.Timeout == 0 {
@@ -61,14 +74,14 @@ func resolveMySQL(c ClientConfig) (string, connInfo, error) {
 		cfg.WriteTimeout = c.MySQL.WriteTimeout
 	}
 
-	return cfg.FormatDSN(), connInfo{Driver: "mysql", Addr: cfg.Addr, DB: cfg.DBName}, nil
+	return cfg.FormatDSN(), ConnInfo{Driver: "mysql", Addr: cfg.Addr, DB: cfg.DBName}, nil
 }
 
 // resolvePostgres 把超时和运行时参数注入 DSN
 //
 // 两种 DSN 格式都支持：postgres://... 的 URL 形式和 libpq 的 key=value 形式。
 // 使用者在 DSN 里显式写了的 key 一律不覆盖——配置里的值只是默认值。
-func resolvePostgres(c ClientConfig) (string, connInfo, error) {
+func resolvePostgres(c ClientConfig) (string, ConnInfo, error) {
 	injects := map[string]string{}
 	if v := seconds(c.DialTimeout); v != "" {
 		injects["connect_timeout"] = v
@@ -91,7 +104,7 @@ func resolvePostgres(c ClientConfig) (string, connInfo, error) {
 
 	dsn, err := injectPostgres(c.DSN, injects)
 	if err != nil {
-		return "", connInfo{}, err
+		return "", ConnInfo{}, err
 	}
 	return dsn, postgresConnInfo(c.DSN), nil
 }
@@ -177,8 +190,8 @@ func quoteKV(v string) string {
 // postgresConnInfo 从 DSN 里取出可安全记录的部分
 //
 // 取不到就留空：这只是给日志用的，解析失败不该让建连失败
-func postgresConnInfo(dsn string) connInfo {
-	info := connInfo{Driver: "postgres"}
+func postgresConnInfo(dsn string) ConnInfo {
+	info := ConnInfo{Driver: "postgres"}
 	if isPostgresURL(dsn) {
 		if u, err := url.Parse(dsn); err == nil {
 			info.Addr = u.Host
@@ -234,7 +247,7 @@ func millis(d time.Duration) string {
 }
 
 // logConn 记一条建连日志，只写确定不含凭证的字段
-func logConn(info connInfo, c ClientConfig) {
+func logConn(info ConnInfo, c ClientConfig) {
 	slog.Info("xgorm connected",
 		"driver", info.Driver, "addr", info.Addr, "db", info.DB,
 		"max_open_conns", c.MaxOpenConns, "max_idle_conns", c.MaxIdleConns)

@@ -53,7 +53,7 @@ func TestResolveDSN_MySQL不覆盖已写的超时(t *testing.T) {
 }
 
 func TestResolveDSN_连接信息里没有密码(t *testing.T) {
-	// connInfo 是唯一进日志的东西，它必须不含凭证
+	// ConnInfo 是唯一进日志的东西，它必须不含凭证
 	for _, c := range []ClientConfig{
 		mysqlCfg("u:" + secret + "@tcp(h:3306)/app"),
 		pgCfg("postgres://u:" + secret + "@h:5432/app"),

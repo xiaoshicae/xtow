@@ -92,7 +92,7 @@ XMetric:
 
 ```yaml
 XGorm:
-  Driver: postgres         # mysql / postgres，默认 postgres
+  Driver: postgres         # mysql / postgres 内置，默认 postgres；其余驱动见下
   DSN: "${DB_DSN}"         # 必填
   DialTimeout: 500ms
   MaxOpenConns: 50
@@ -113,6 +113,33 @@ XGorm:
     IdleInTxTimeout: 0s
     Params: {}             # 任意 PG 运行时参数，同名时以它为准
 ```
+
+### 其它驱动
+
+mysql 和 postgres 内置，其余驱动住在自己的 module 里，匿名 import 一行就注册好：
+
+```go
+import (
+	"github.com/xiaoshicae/xtow/xgorm"
+	_ "github.com/xiaoshicae/xtow/xgorm/clickhouse"
+)
+```
+
+```yaml
+XGorm:
+  Driver: clickhouse
+  DSN: "${CH_DSN}"         # clickhouse://user:pass@host:9000/db
+  DialTimeout: 500ms       # 注入 DSN 的 dial_timeout，DSN 里已写的不覆盖
+```
+
+拿到的仍然是原生的 `*gorm.DB`，配置项和多实例写法都一样。
+
+为什么不直接放进 xgorm：实测一个只 import xgorm 的应用模块图是 65 个，
+加上 ClickHouse 驱动变成 733 个（编译包 140 → 183）。Go 的 MVS 按模块图把
+版本要求强加给使用者，不用它的人不该为它付这个钱。
+
+驱动名写错或忘了 import 时启动会失败，错误里列出当前注册了哪些；
+也可以用 `xgorm.Drivers()` 自己查。
 
 多实例：
 

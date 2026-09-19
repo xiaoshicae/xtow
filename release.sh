@@ -22,7 +22,7 @@ MOD=github.com/xiaoshicae/xtow
 #
 # example 不在列表里，也不打 tag：它是示例不是库，replace 要一直留着，
 # 这样它永远编译的是仓库当前的代码，而不是某个已发布版本。
-ORDER="xtrace xmetric xcache xgorm xredis xhttp xgin xginswagger"
+ORDER="xtrace xmetric xcache xgorm xgorm/clickhouse xredis xhttp xgin xginswagger"
 
 run() {
   echo "  \$ $*"
@@ -52,7 +52,7 @@ for m in $ORDER; do
   # 这个模块 require 了哪些仓库内的模块，就把哪些的版本号钉上。
   # 要跳过它自己：go mod edit -json 里也有 module 自身的路径，
   # 不跳的话会给它加一条「自己 require 自己」
-  for dep in $(GOWORK=off go mod edit -json "$m/go.mod" | grep -oE "\"$MOD(/[a-z]+)?\"" | tr -d '"' | sort -u); do
+  for dep in $(GOWORK=off go mod edit -json "$m/go.mod" | grep -oE "\"$MOD(/[a-z]+)*\"" | tr -d '"' | sort -u); do
     [ "$dep" = "$MOD/$m" ] && continue
     run env GOWORK=off go mod edit -dropreplace="$dep" -require="$dep@$VERSION" "$m/go.mod"
   done

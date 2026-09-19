@@ -27,7 +27,7 @@ const tracerName = "github.com/xiaoshicae/xtow/xgorm"
 type registrar func(name string, fn func(*gorm.DB)) error
 
 // installTracing 给实例挂上链路回调，每种操作前后各一个
-func installTracing(db *gorm.DB, info connInfo) error {
+func installTracing(db *gorm.DB, info ConnInfo) error {
 	cb := db.Callback()
 	pairs := []struct {
 		op            string
@@ -52,7 +52,7 @@ func installTracing(db *gorm.DB, info connInfo) error {
 }
 
 // startSpan 开一个 Span 并把它塞回 Statement 的 context
-func startSpan(op string, info connInfo) func(*gorm.DB) {
+func startSpan(op string, info ConnInfo) func(*gorm.DB) {
 	return func(db *gorm.DB) {
 		if db.Statement == nil {
 			return

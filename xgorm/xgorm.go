@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/xiaoshicae/xtow/registry"
@@ -52,7 +50,12 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 		gormCfg.Logger = newGormLogger(cfg)
 	}
 
-	db, err := gorm.Open(dialector(cfg.Driver, dsn), gormCfg)
+	dialect, known := lookupDialect(cfg.Driver)
+	if !known {
+		return nil, nil, fmt.Errorf("xgorm: %w", unknownDriver(cfg.Driver))
+	}
+
+	db, err := gorm.Open(dialect.Open(dsn), gormCfg)
 	if err != nil {
 		// gorm 自己会在 Initialize 和自动 ping 失败时关掉池子（v1.31 起），
 		// 这里再关一次是兜底：*sql.DB 允许重复 Close，代价是一次空调用，
@@ -95,13 +98,6 @@ func New(ctx context.Context, cfg ClientConfig) (*gorm.DB, io.Closer, error) {
 	return db, &poolCloser{pool: pool, info: info}, nil
 }
 
-func dialector(d Driver, dsn string) gorm.Dialector {
-	if d == DriverMySQL {
-		return mysql.Open(dsn)
-	}
-	return postgres.Open(dsn)
-}
-
 // ping 建连验证，失败按固定间隔重试；ctx 取消时立即放弃
 func ping(ctx context.Context, pool *sql.DB, cfg ClientConfig) error {
 	return xutil.Retry(ctx, pingAttempts, pingTimeout(cfg), pingInterval, pool.PingContext)
@@ -138,7 +134,7 @@ func closePool(db *gorm.DB) {
 
 type poolCloser struct {
 	pool *sql.DB
-	info connInfo
+	info ConnInfo
 }
 
 func (c *poolCloser) Close() error {
