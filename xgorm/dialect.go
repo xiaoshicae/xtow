@@ -25,10 +25,12 @@ type ConnInfo struct {
 //
 //	import _ "github.com/xiaoshicae/xtow/xgorm/clickhouse"
 //
-// 拆成独立 module 是因为驱动很重。实测一个只 import xgorm 的应用，模块图是
-// 65 个；加上 ClickHouse 驱动变成 733 个，而编译包只从 140 涨到 183——
-// 模块图涨得比实际编进去的代码多得多，而 Go 的 MVS 正是按模块图把版本要求
-// 强加给使用者的，哪怕他只用 MySQL、一个 ClickHouse 的包都没 import。
+// 拆成独立 module 是因为驱动很重。实测一个只 import xgorm 的应用模块图是
+// 65 个，加上 ClickHouse 驱动变成 146 个（编译包 140 → 183）——多出来的
+// 大头是 Docker 和 testcontainers，因为 clickhouse-go 把集成测试用的它们
+// 写在了自己 go.mod 的主 require 块里，而 go.mod 分不出「只测试用」。
+// Go 的 MVS 正是按模块图把版本要求强加给使用者的，哪怕他只用 MySQL、
+// 一个 ClickHouse 的包都没 import。
 type Dialect struct {
 	// Name 驱动名，即配置里 Driver 那一项要写的值
 	Name Driver

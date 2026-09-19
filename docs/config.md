@@ -135,8 +135,9 @@ XGorm:
 拿到的仍然是原生的 `*gorm.DB`，配置项和多实例写法都一样。
 
 为什么不直接放进 xgorm：实测一个只 import xgorm 的应用模块图是 65 个，
-加上 ClickHouse 驱动变成 733 个（编译包 140 → 183）。Go 的 MVS 按模块图把
-版本要求强加给使用者，不用它的人不该为它付这个钱。
+加上 ClickHouse 驱动变成 146 个（编译包 140 → 183）。多出来的大头是 Docker 和
+testcontainers —— `clickhouse-go` 用它们跑集成测试，而 `go.mod` 分不出
+「只测试用」。Go 的 MVS 按模块图把版本要求强加给使用者，不用它的人不该付这个钱。
 
 驱动名写错或忘了 import 时启动会失败，错误里列出当前注册了哪些；
 也可以用 `xgorm.Drivers()` 自己查。
