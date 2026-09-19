@@ -138,6 +138,53 @@ func New(ctx context.Context, cfg Config) (*T, io.Closer, error)  // 会建连�
 
 这一条写进了 CI 检查。
 
+### 不是 Web 服务怎么办：consumer / job
+
+`xgin` 没有任何特殊地位，它只是众多 `Runnable` 实现中的一个。触发初始化的是
+`xtow.Run`，跟你用不用 xgin 无关：
+
+```
+loadConfig → StageLog → StageTelemetry → StageClient(XGorm/XRedis/XCache) → 启动 Runnable
+```
+
+所以消费者服务要做的只有一件事：写一个 `Runnable`。
+
+```go
+func (c *Consumer) Start(ctx context.Context) error {
+    for range c.workers {
+        c.wg.Add(1)
+        go func() { defer c.wg.Done(); c.loop(ctx) }()  // ctx 取消 → 不再取新消息
+    }
+    c.wg.Wait()          // 等在途消息做完，理由见下
+    return c.q.Close()   // Close 放这儿，不放 Stop 里，理由也见下
+}
+
+func (c *Consumer) Stop(context.Context) error { return nil }
+
+func main() { xtow.MustRun(&Consumer{q: client, handle: handle, conf: settings}) }
+```
+
+一次性任务更简单：`Start` 干完 `return nil`，框架立刻走正常的逆序关闭。
+
+**三个容易踩的地方**，`example/consumer/` 里每一条都有测试钉着：
+
+| | 为什么 |
+|---|---|
+| `Start` 必须等在途消息做完再返回 | 框架是在 `Start` 返回**之后**才关数据库和缓存的。提前返回，还在处理的消息就会摸到已经关掉的连接池 |
+| 处理消息用的 ctx 要 `context.WithoutCancel` | 沿用已取消的 ctx，这条消息里每一次写库、每一次调下游、连最后那次 `Ack` 都会一进去就被拒绝——消息没做完，队列也没收到确认 |
+| 不要在 `Stop` 里 `Close` 客户端 | 框架是先调 `Stop`、再等 `Start` 返回的，此刻 worker 还在处理在途消息。多数客户端 `Close` 时会顺带提交 offset，提前提交 = 退出时静默丢消息 |
+
+第二条和 `xflow` 的回滚是同一个道理：**补偿逻辑最需要跑完的时机，恰恰是退出的那一刻。**
+
+单条消息的处理超时必须小于 `xtow.WithStopTimeout`（默认 15s），
+和 `XGin.ShutdownTimeout` 与总预算的关系一样——否则框架等不到就往下关资源了。
+
+```bash
+cd example/consumer && go run . --config=application.yml
+```
+
+业务自己的配置块怎么接进来，见 [`docs/config.md`](docs/config.md) 末尾那一节。
+
 ### 退出信号：从进程起步的第一毫秒就接管
 
 注册信号处理这件事本身，**取消了系统原本的「收到就死」**。这是个开关，不是
@@ -260,6 +307,7 @@ xtow/
 ├── xflow/               流程编排 + 自动回滚，零第三方依赖
 ├── docs/config.md       全部配置项参考
 ├── example/             可直接跑的示例，同时是唯一的跨模块集成测试
+│   └── consumer/        消息队列消费者：非 Web 服务的形状
 ├── check.sh             把设计约束编译成检查
 ├── mutate.sh            变异测试：把每条承诺改坏，看有没有测试会失败
 └── test.sh              跑全仓库测试（go test ./... 不跨模块边界）

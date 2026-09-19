@@ -386,3 +386,54 @@ func initAll() (io.Closer, error) { return xclient.Build(reg, cfg.Clients, New) 
 
 - 必须导出纯构造器 `New`——零装配是默认路径，不能是唯一路径
 - 不许 import 根包，只能 import `registry`：依赖是单向的
+
+---
+
+## 业务自己的配置块
+
+配置文件里出现一个没人认领的顶层 key，进程会**直接起不来**（多半是拼错了，
+或者忘了 import 对应的包）。所以业务想加自己的配置块，得有人认领它。
+
+认领只要一次 `registry.Register`，不需要 `Init`——纯配置块没有任何东西要初始化：
+
+```go
+// internal/conf/conf.go
+package conf
+
+import "github.com/xiaoshicae/xtow/registry"
+
+type Config struct {
+    Topic          string        `yaml:"Topic"`
+    Workers        int           `yaml:"Workers"`
+    MessageTimeout time.Duration `yaml:"MessageTimeout"`
+}
+
+// 默认值预填在结构体里，文件里没写的字段保持不变
+func DefaultConfig() Config {
+    return Config{Topic: "orders", Workers: 4, MessageTimeout: 5 * time.Second}
+}
+
+var cfg = DefaultConfig()
+
+func C() Config { return cfg }
+
+func init() {
+    registry.Register(registry.Component{Key: "MyApp", Config: &cfg})
+}
+```
+
+```yaml
+MyApp:
+  Topic: orders
+  Workers: 4
+  MessageTimeout: 5s
+```
+
+业务的配置块和框架的走的是同一套规则：默认值预填、字段拼错启动失败、
+`${VAR}` 占位符照样生效。
+
+**读的时机**：`C()` 要在 `xtow.Run` 开始之后才读。在 `main` 里构造 Runnable 的
+那一刻配置文件还没被读过，此时取值拿到的是一份默认值，配置文件从此再也不生效。
+把它包成一个函数传进去，到 `Start` 里再调——`xgin` 处理同一个问题用的也是这个办法。
+
+可运行的完整例子在 `example/consumer/`。

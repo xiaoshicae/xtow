@@ -11,3 +11,4 @@
 # go build 默认把二进制产在包目录里，名字就是目录名。
 # 误提交过一次 example/example（36.9 MB），所以这里按「无扩展名的可执行文件」挡
 /example/example
+/example/consumer/consumer
