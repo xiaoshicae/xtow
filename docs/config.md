@@ -5,6 +5,73 @@
 
 配置文件位置：`--config=<path>` > `XTOW_CONFIG` > `conf/application.yml` 等约定路径。
 
+## Profiles —— 按环境分文件
+
+写法和 Spring 一样：`application.yml` 放公共的，`application-{profile}.yml` 放这个环境特有的。
+
+```bash
+./app --profile=prod           # 或 XTOW_PROFILE=prod
+./app --profile=prod,cn        # 多个用逗号分隔，靠后的压过靠前的
+```
+
+也可以写在配置文件里（只能写在 base 文件里，见下）：
+
+```yaml
+Profiles:
+  Active: [prod]        # 或 Active: "prod,cn"
+```
+
+优先级：`--profile` > `XTOW_PROFILE` > 文件里的 `Profiles.Active`。
+
+profile 文件名由 base 文件推出来，目录和扩展名都跟着它：
+`--config=/etc/app/svc.yaml` 配 `--profile=prod` 找的是 `/etc/app/svc-prod.yaml`。
+
+> **与 Spring 的一处不同**：点名的 profile 文件不存在时，这里**直接启动失败**，
+> Spring 是静默跳过。profile 名写错几乎总是笔误，静默跳过的结果是一份
+> 谁都没看过的配置悄悄以默认值起来。
+
+## Import —— 引入别的配置文件
+
+对应 Spring 的 `spring.config.import`。
+
+```yaml
+Import: conf/shared.yml           # 一个
+
+Import:                           # 多个，靠后的压过靠前的
+  - conf/shared.yml
+  - conf/db.yml
+  - optional:conf/local.yml       # optional: 前缀，文件不存在就跳过
+```
+
+- **引进来的压过引它的那个文件**，和 Spring 一致（import 相当于插在声明它的那份文档正下方，下面的压过上面的）
+- 相对路径按**引它的文件所在目录**解析，不是进程的工作目录
+- 同一个文件只会被读一次，所以循环引用会自己断掉而不是转不出来
+- 被引进来的文件里可以再写 `Import`，但**不能写 `Profiles`**：那会让「加载哪些文件」变成一个和加载顺序互相依赖的问题，直接报错
+
+## 合并规则
+
+多个文件的优先级，从低到高：
+
+```
+application.yml  <  它 Import 的  <  application-prod.yml  <  prod 那份 Import 的
+```
+
+叠加规则和 Spring 一致：
+
+| 类型 | 规则 |
+|---|---|
+| map | **递归合并**，两边都有的 key 用优先级高的那个 |
+| 列表 | **整体替换**，不逐元素合并 |
+| 标量 | 优先级高的覆盖 |
+
+列表整体替换是最容易误解的一条：逐元素合并的话，base 写 `[A, B]`、
+prod 写 `[C]`，结果会是 `[C, B]` —— 你以为换掉了整张表，实际只换掉第一项，
+剩下那项来自另一个文件。想追加就把完整的列表写全。
+
+`${VAR}` 占位符在**全部合并完之后**才统一展开（只有 `Import` 的路径是例外，
+那个得先展开才知道去读哪个文件）。所以 base 里一个必填的 `${SECRET}`
+如果已经被 profile 文件整个覆盖掉了，就不会再要求它必须设置。
+
 ## 通用规则
 
 | 规则 | 说明 |

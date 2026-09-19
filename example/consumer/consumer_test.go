@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -231,3 +232,46 @@ func TestRun_组件在消费者收工之后才关(t *testing.T) {
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
+
+func TestQueue_退出时生产者还在投递也不崩(t *testing.T) {
+	// 回归用例。原来 Close 是 close(ch)，而这个例子里 feed 一直在往里发；
+	// 关的那一刻正好有人在投递就会 panic: send on closed channel。
+	// 只在那个窗口里复现，所以跑十次八次都可能是好的——实际是一跑真就炸
+	q := newMemQueue(4)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 4 { // 四个生产者一起投，把窗口撑开
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; ; j++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				q.publish(strconv.Itoa(n*1000+j), nil)
+			}
+		}(i)
+	}
+
+	c := &Consumer{q: q, conf: testSettings(2, time.Second),
+		handle: func(context.Context, Message) error { return nil }}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	slog.SetDefault(quiet())
+
+	if err := c.Start(ctx); err != nil { // Start 收工时会 Close 队列
+		t.Fatal(err)
+	}
+	// 关掉之后再让生产者投一会儿，确认投到已关闭的队列上也不炸
+	time.Sleep(30 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if !q.closed.Load() {
+		t.Error("Start 收工时该把队列关掉")
+	}
+}

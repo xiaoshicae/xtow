@@ -49,7 +49,12 @@ type Queue interface {
 // memQueue 一个内存队列，只为让这个例子能直接跑起来。
 // 真实项目里这一整个类型都不存在，换成你的客户端即可。
 type memQueue struct {
-	ch       chan Message
+	ch chan Message
+
+	// done 关闭的信号。用它而不是 close(ch)：生产者可能正好在这一刻
+	// 往里发，而往已关闭的 channel 发会 panic——退出时偶发崩溃，
+	// 只有「关的那一刻正好有人在投递」才复现
+	done     chan struct{}
 	closed   atomic.Bool
 	closeOne sync.Once
 
@@ -58,13 +63,18 @@ type memQueue struct {
 	nacked []string
 }
 
-func newMemQueue(buf int) *memQueue { return &memQueue{ch: make(chan Message, buf)} }
+func newMemQueue(buf int) *memQueue {
+	return &memQueue{ch: make(chan Message, buf), done: make(chan struct{})}
+}
 
 func (q *memQueue) publish(id string, body []byte) {
 	m := Message{ID: id, Body: body}
 	m.ack = func() { q.record(&q.acked, id) }
 	m.nack = func() { q.record(&q.nacked, id) }
-	q.ch <- m
+	select {
+	case <-q.done: // 已经关了，丢掉这条
+	case q.ch <- m:
+	}
 }
 
 func (q *memQueue) record(into *[]string, id string) {
@@ -77,15 +87,17 @@ func (q *memQueue) Next(ctx context.Context) (Message, bool) {
 	select {
 	case <-ctx.Done():
 		return Message{}, false
-	case m, ok := <-q.ch:
-		return m, ok
+	case <-q.done:
+		return Message{}, false
+	case m := <-q.ch:
+		return m, true
 	}
 }
 
 func (q *memQueue) Close() error {
 	q.closeOne.Do(func() {
 		q.closed.Store(true)
-		close(q.ch)
+		close(q.done)
 	})
 	return nil
 }

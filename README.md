@@ -268,6 +268,39 @@ xtow 的做法是三件事一起：
 配置文件位置：`--config=<path>` > `XTOW_CONFIG` > `conf/application.yml` 等约定路径。
 显式指定的文件找不到是错误；约定路径一个都没命中则只告警，全用默认值起。
 
+### profile 与 import
+
+写法跟 Spring 一致，从那边过来不用重新学：
+
+```bash
+./app --profile=prod          # 或 XTOW_PROFILE=prod，多个用逗号分隔
+```
+
+```yaml
+# application.yml
+Profiles:
+  Active: [prod]              # 也可以写在文件里，优先级最低
+Import:
+  - conf/shared.yml
+  - optional:conf/local.yml   # optional: 文件不存在就跳过
+```
+
+优先级从低到高：
+
+```
+application.yml  <  它 Import 的  <  application-prod.yml  <  prod 那份 Import 的
+```
+
+合并规则也与 Spring 一致：**map 递归合并、列表整体替换、标量覆盖**。
+列表这条最容易误解——逐元素合并的话 `[A,B]` 叠上 `[C]` 会变成 `[C,B]`，
+你以为换掉了整张表，实际只换掉第一项。
+
+一处**故意和 Spring 不同**：点名的 profile 文件不存在时这里直接启动失败，
+Spring 是静默跳过。profile 名写错几乎总是笔误，静默跳过的结果是
+一份谁都没看过的配置悄悄以默认值起来。
+
+细节见 [`docs/config.md`](docs/config.md)。
+
 ### 我们故意跟底层库不一样的地方
 
 框架的默认值是量过之后定的，有几处跟底层库自己的默认不同。

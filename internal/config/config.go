@@ -18,28 +18,58 @@ import (
 
 var placeholder = regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
 
-// Load 读一次配置文件，把每个 Component 声明的那一段解进它自己的结构体。
+// Load 读配置并把每个 Component 声明的那一段解进它自己的结构体。
 //
 // 组件的 Config 指针里已经是默认值，文件里没写的字段保持不变——
 // 所以不需要指针字段来区分「没配」和「配成零值」。
+//
+// 读的不一定只有一个文件：base 文件可以 Import 别的文件，
+// 激活的 profile 还会带上 application-{profile}.yml。
+// 合并规则和优先级见 loadAll 与 merge。
 func Load(path string, list []registry.Component) error {
-	raw, err := os.ReadFile(path)
+	base, err := readOne(path)
 	if err != nil {
-		return xerror.Newf("xconfig", "config", "read config %s: %w", path, err)
+		return err
 	}
 
-	var root yaml.Node
-	if err := yaml.Unmarshal(raw, &root); err != nil {
-		return xerror.Newf("xconfig", "config", "parse config %s: %w", path, err)
+	// profile 从三个地方来，优先级：启动参数 > 环境变量 > base 文件里的 Profiles.Active。
+	// 先读 base 是因为文件里那一份也算一个来源
+	declared, err := profilesOf(base.node, path)
+	if err != nil {
+		return err
+	}
+	active := Profiles(declared)
+
+	files, err := loadAll(path, active)
+	if err != nil {
+		return err
 	}
 
+	var root *yaml.Node
+	for _, f := range files {
+		// Profiles 只认 base 文件里那一份：被引进来的文件再去激活 profile 的话，
+		// 「谁决定加载哪些文件」就成了一个和加载顺序互相依赖的问题
+		if extra, err := profilesOf(f.node, f.path); err != nil {
+			return err
+		} else if len(extra) > 0 && f.path != path {
+			return xerror.Newf("xconfig", "config",
+				"%s may only be set in the base config file, found it in %s", ProfilesKey, f.path)
+		}
+		root = merge(root, f.node)
+	}
+	if root == nil {
+		return nil
+	}
+
+	// 占位符在全部合并完之后统一展开一次：base 里一个必填的 ${VAR}
+	// 如果已经被 profile 文件覆盖掉了，就不该再要求它必须设置
 	var missing []string
-	expand(&root, &missing)
+	expand(root, &missing)
 	if len(missing) > 0 {
 		return xerror.Newf("xconfig", "config", "environment variables not set: %s", strings.Join(missing, ", "))
 	}
 
-	sections, err := topLevel(&root)
+	sections, err := topLevel(root)
 	if err != nil {
 		return err
 	}
@@ -164,4 +194,41 @@ func retag(n *yaml.Node) {
 		return
 	}
 	n.Tag = ""
+}
+
+// readOne 读并解析一个配置文件
+func readOne(path string) (loaded, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return loaded{}, xerror.Newf("xconfig", "config", "read config %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return loaded{}, xerror.Newf("xconfig", "config", "parse config %s: %w", path, err)
+	}
+	return loaded{path: path, node: &doc}, nil
+}
+
+// profilesOf 取出并移除文档里的 Profiles 块，返回它声明的 profile 列表
+func profilesOf(doc *yaml.Node, path string) ([]string, error) {
+	node := takeTopLevel(doc, ProfilesKey)
+	if node == nil {
+		return nil, nil
+	}
+
+	var spec struct {
+		Active []string `yaml:"Active"`
+	}
+	// 这里也走严格解码：Profiles 下面写错字段同样该当场失败
+	if err := decodeStrict(node, &spec); err != nil {
+		return nil, xerror.Newf("xconfig", "config", "invalid %s in %s: %w", ProfilesKey, path, err)
+	}
+
+	// 列表和逗号分隔的字符串两种写法都收，跟 Spring 一样。
+	// 写成 Active: "dev,prod" 时上面解出来是一个元素，这里再拆开
+	out := make([]string, 0, len(spec.Active))
+	for _, a := range spec.Active {
+		out = append(out, splitProfiles(a)...)
+	}
+	return out, nil
 }

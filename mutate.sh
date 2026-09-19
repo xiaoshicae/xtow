@@ -87,6 +87,37 @@ cut('\t\tif prev, dup := lines[key.Value]; dup {', 'key.Value, key.Line, prev)\n
 PY
 
 echo "== 启动与退出 =="
+mutate "列表整体替换不逐元素合并" internal/config/merge.go . 'TestLoad' <<'PY'
+swap('''\tif base.Kind != yaml.MappingNode || override.Kind != yaml.MappingNode {
+\t\treturn override
+\t}''', '''\tif base.Kind == yaml.SequenceNode && override.Kind == yaml.SequenceNode {
+\t\tout := *base
+\t\tout.Content = append(append([]*yaml.Node{}, override.Content...), base.Content[len(override.Content):]...)
+\t\treturn &out
+\t}
+\tif base.Kind != yaml.MappingNode || override.Kind != yaml.MappingNode {
+\t\treturn override
+\t}''')
+PY
+mutate "import 进来的压过引它的" internal/config/source.go . 'TestLoad' <<'PY'
+swap('\tout := []loaded{{path: path, node: &doc}}\n', '\tvar out []loaded\n')
+swap('''\t\tout = append(out, nested...)
+\t}
+\treturn out, nil''', '''\t\tout = append(out, nested...)
+\t}
+\tout = append(out, loaded{path: path, node: &doc})
+\treturn out, nil''')
+PY
+mutate "profile 文件不存在直接失败" internal/config/source.go . 'TestLoad' <<'PY'
+swap('if err := add(profilePath(base, p), true); err != nil {', 'if err := add(profilePath(base, p), false); err != nil {')
+PY
+mutate "退出时生产者还在投递也不崩" example/consumer/queue.go ./example 'TestQueue' <<'PY'
+swap('''\tselect {
+\tcase <-q.done: // 已经关了，丢掉这条
+\tcase q.ch <- m:
+\t}''', '\tq.ch <- m')
+swap('\t\tclose(q.done)', '\t\tclose(q.ch)')
+PY
 mutate "第二个信号能终止卡住的进程" xtow.go . 'TestRun' <<'PY'
 swap('\t\t\tsignal.Stop(ch)\n\t\t\to.log().Info(','\t\t\to.log().Info(',1)
 PY
